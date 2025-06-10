@@ -9,6 +9,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { apiRequest } from "@/lib/queryClient"; // Import apiRequest
+import { useAuth } from "@/contexts/AuthContext"; // Import useAuth to get token
 
 type CategoryOption = {
   value: string;
@@ -18,6 +20,7 @@ type CategoryOption = {
 
 const KnowledgeHub = () => {
   const queryClient = useQueryClient();
+  const { token } = useAuth(); // Get token from AuthContext
   const [activeTab, setActiveTab] = useState("all");
   const [openCreateDialog, setOpenCreateDialog] = useState(false);
   const [title, setTitle] = useState("");
@@ -35,18 +38,8 @@ const KnowledgeHub = () => {
 
   const createPostMutation = useMutation({
     mutationFn: async (newPost: { title: string; content: string; categoryId: string }) => {
-      const response = await fetch("/api/posts", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(newPost),
-      });
-      
-      if (!response.ok) {
-        throw new Error("Failed to create post");
-      }
-      
+      // Use apiRequest which handles token
+      const response = await apiRequest("POST", "/api/posts", newPost, token);
       return response.json();
     },
     onSuccess: () => {
@@ -81,17 +74,13 @@ const KnowledgeHub = () => {
 
   const handleSavePost = async (postId: number, isSaved: boolean) => {
     try {
-      await fetch(`/api/posts/${postId}/save`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ saved: !isSaved }),
-      });
+      // Use apiRequest which handles token
+      await apiRequest("POST", `/api/posts/${postId}/save`, { saved: !isSaved }, token);
       
       // Refetch the posts
       queryClient.invalidateQueries({ queryKey: ["/api/posts"] });
     } catch (error) {
+      // Errors (including auth) should be caught by react-query's global handler or useMutation's onError
       console.error("Error saving post:", error);
     }
   };

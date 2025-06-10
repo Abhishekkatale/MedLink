@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { User } from "@shared/schema";
+import { useAuth } from "../contexts/AuthContext"; // Import useAuth
+import { Link, useLocation } from "wouter"; // Import Link and useLocation for navigation
+import { User } from "@shared/schema"; // Keep User type if needed elsewhere, or remove if only from useAuth
 import { ThemeToggle } from "@/components/theme-toggle";
 
 interface HeaderProps {
@@ -9,10 +10,13 @@ interface HeaderProps {
 
 const Header = ({ title }: HeaderProps) => {
   const [searchQuery, setSearchQuery] = useState("");
+  const { isAuthenticated, user, logout, isLoading } = useAuth(); // Use useAuth hook
+  const [, navigate] = useLocation(); // For programmatic navigation after logout
 
-  const { data: currentUser } = useQuery<User>({
-    queryKey: ["/api/users/current"],
-  });
+  const handleLogout = () => {
+    logout();
+    navigate("/login"); // Redirect to login after logout
+  };
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,13 +29,40 @@ const Header = ({ title }: HeaderProps) => {
       <div className="flex items-center justify-between px-6 py-4">
         <div>
           <h1 className="text-xl font-semibold text-text-primary dark:text-white">{title}</h1>
-          <p className="text-sm text-text-secondary dark:text-slate-300">
-            Welcome back, {currentUser?.name?.split(' ')[0] || '...'}
-          </p>
+          {isAuthenticated && user && (
+            <p className="text-sm text-text-secondary dark:text-slate-300">
+              Welcome back, {user.name?.split(' ')[0]}
+            </p>
+          )}
         </div>
         
         {/* Search and actions */}
         <div className="flex items-center space-x-4">
+          {!isLoading && ( // Only show auth buttons when not loading auth state
+            <>
+              {isAuthenticated ? (
+                <button
+                  onClick={handleLogout}
+                  className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-md"
+                >
+                  Logout
+                </button>
+              ) : (
+                <>
+                  <Link href="/login">
+                    <a className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 rounded-md">
+                      Login
+                    </a>
+                  </Link>
+                  <Link href="/signup">
+                    <a className="px-4 py-2 text-sm font-medium text-white bg-primary hover:bg-primary/90 rounded-md">
+                      Signup
+                    </a>
+                  </Link>
+                </>
+              )}
+            </>
+          )}
           <form onSubmit={handleSearch} className="relative hidden md:block">
             <span className="absolute inset-y-0 left-0 flex items-center pl-3">
               <span className="material-icons text-text-muted dark:text-slate-400 text-lg">search</span>

@@ -9,9 +9,12 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { User } from "@shared/schema";
+import { apiRequest } from "@/lib/queryClient"; // Import apiRequest
+import { useAuth } from "@/contexts/AuthContext"; // Import useAuth
 
 const Documents = () => {
   const queryClient = useQueryClient();
+  const { token } = useAuth(); // Get token
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTab] = useState("all");
   const [openShareDialog, setOpenShareDialog] = useState(false);
@@ -31,13 +34,23 @@ const Documents = () => {
       const formData = new FormData();
       formData.append("file", file);
       
+      // For FormData, fetch needs to set Content-Type to multipart/form-data automatically.
+      // We only add Authorization header. apiRequest might try to set Content-Type if data is present.
+      // So, we might need a direct fetch here or ensure apiRequest handles FormData correctly.
+      // Let's try direct fetch for FormData upload.
+      const headers: HeadersInit = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
       const response = await fetch("/api/documents/upload", {
         method: "POST",
         body: formData,
+        headers, // Pass only Authorization, let browser set Content-Type for FormData
       });
       
       if (!response.ok) {
-        throw new Error("Upload failed");
+        const errorData = await response.text();
+        throw new Error(response.status + ": " + (errorData || "Upload failed"));
       }
       
       return response.json();
@@ -49,18 +62,8 @@ const Documents = () => {
 
   const shareMutation = useMutation({
     mutationFn: async ({ documentId, userIds }: { documentId: number; userIds: number[] }) => {
-      const response = await fetch(`/api/documents/${documentId}/share`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ userIds }),
-      });
-      
-      if (!response.ok) {
-        throw new Error("Sharing failed");
-      }
-      
+      // Use apiRequest which handles token
+      const response = await apiRequest("POST", `/api/documents/${documentId}/share`, { userIds }, token);
       return response.json();
     },
     onSuccess: () => {
