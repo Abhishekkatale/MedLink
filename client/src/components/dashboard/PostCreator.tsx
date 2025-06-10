@@ -20,6 +20,7 @@ type CategoryOption = {
   label: string;
 };
 
+
 const PostCreator = () => {
   const [openCreateDialog, setOpenCreateDialog] = useState(false);
   const [title, setTitle] = useState("");
@@ -42,7 +43,8 @@ const PostCreator = () => {
     setTitle("");
     setContent("");
     setCategory("");
-  };
+  }; 
+
 
   return (
     <>

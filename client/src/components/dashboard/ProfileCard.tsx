@@ -11,7 +11,7 @@ const ProfileCard = () => {
 
   // Fallback profile data if API returns empty
   const profileData = profile || {
-    name: "Dr. Abhishek Jadhav",
+    name: "Dr. John Wilson",
     initials: "AJ",
     title: "Cardiologist",
     organization: "Memorial Hospital",
