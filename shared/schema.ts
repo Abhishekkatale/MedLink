@@ -1,6 +1,9 @@
 import { pgTable, text, serial, integer, boolean, timestamp } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
+import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
+
+// Enums
+export const UserRole = z.enum(['admin', 'superadmin', 'patient']);
 
 // User schema
 export const users = pgTable("users", {
@@ -14,6 +17,7 @@ export const users = pgTable("users", {
   location: text("location").notNull(),
   initials: text("initials").notNull(),
   isConnected: boolean("is_connected").default(false),
+  role: text("role", { enum: UserRole.options }).notNull().default('patient'),
 });
 
 // User profile schema
@@ -118,7 +122,9 @@ export const stats = pgTable("stats", {
 });
 
 // Insert schemas
-export const insertUserSchema = createInsertSchema(users).omit({ id: true });
+export const insertUserSchema = createInsertSchema(users, {
+  role: UserRole,
+}).omit({ id: true });
 export const insertProfileSchema = createInsertSchema(profiles).omit({ id: true });
 export const insertPostSchema = createInsertSchema(posts).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertCategorySchema = createInsertSchema(categories).omit({ id: true });
@@ -131,8 +137,13 @@ export const insertSavedPostSchema = createInsertSchema(savedPosts).omit({ id: t
 export const insertConnectionSchema = createInsertSchema(connections).omit({ id: true, createdAt: true });
 export const insertStatSchema = createInsertSchema(stats).omit({ id: true });
 
+// Select Schemas for precise type inference
+export const selectUserSchema = createSelectSchema(users, {
+  role: UserRole,
+});
+
 // Types
-export type User = typeof users.$inferSelect;
+export type User = z.infer<typeof selectUserSchema>;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 
 export type Profile = typeof profiles.$inferSelect;

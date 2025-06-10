@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { apiRequest } from "@/lib/queryClient"; // Import apiRequest
+import { useAuth } from "@/contexts/AuthContext"; // Import useAuth
 
 type SpecialtyFilter = "all" | string;
 
@@ -12,9 +14,10 @@ const Directory = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [specialtyFilter, setSpecialtyFilter] = useState<SpecialtyFilter>("all");
   const queryClient = useQueryClient();
+  const { token } = useAuth(); // Get token
 
   const { data: users, isLoading } = useQuery<User[]>({
-    queryKey: ["/api/users/directory", searchTerm, specialtyFilter],
+    queryKey: ["/api/users/directory", searchTerm, specialtyFilter], // This query will use the updated getQueryFn
   });
 
   const { data: specialties } = useQuery<string[]>({
@@ -32,17 +35,15 @@ const Directory = () => {
 
   const handleConnectRequest = async (userId: number) => {
     try {
-      await fetch(`/api/connections/connect`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ userId }),
-      });
+      // Use apiRequest which handles token
+      await apiRequest("POST", "/api/connections/connect", { userId }, token);
       
       // Refetch users to update UI
       queryClient.invalidateQueries({ queryKey: ["/api/users/directory"] });
+      // Optionally, also refetch connection requests if that's a separate query and relevant here
+      queryClient.invalidateQueries({ queryKey: ["/api/users/connection-requests"] });
     } catch (error) {
+      // Errors (including auth) should be caught by react-query's global handler or useMutation's onError
       console.error("Error connecting with user:", error);
     }
   };

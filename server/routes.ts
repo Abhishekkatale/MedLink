@@ -1,14 +1,28 @@
 import type { Express, Request, Response } from "express";
-import { createServer, type Server } from "http";
+import { createServer, type Server, IncomingMessage } from "http";
 import { storage } from "./storage";
+import { UserRole } from "@shared/schema"; // Import UserRole
+import jwt from 'jsonwebtoken'; // Import jsonwebtoken
 import multer from "multer";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { insertPostSchema, insertDocumentSchema, insertConnectionSchema } from "@shared/schema";
+import { insertPostSchema, insertDocumentSchema, insertConnectionSchema, insertUserSchema, User } from "@shared/schema"; // Added insertUserSchema & User
 import { ZodError } from "zod";
 import { fromZodError } from "zod-validation-error";
+
+// Define a JWT secret key
+const JWT_SECRET = process.env.JWT_SECRET || "your-super-secret-key-for-dev";
+
+// Extend Express Request type to include 'user' property
+interface AuthenticatedRequest extends Request {
+  user?: {
+    id: number;
+    username: string;
+    role: string; // Or UserRole if you parse it strictly
+  };
+}
 
 // Set up paths for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -45,21 +59,138 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.status(500).json({ message: err.message || "Internal server error" });
   };
 
-  // Current user endpoint
-  app.get("/api/users/current", async (req: Request, res: Response) => {
+  // JWT Authentication Middleware
+  const authenticateJWT = (req: AuthenticatedRequest, res: Response, next: Function) => {
+    const authHeader = req.headers.authorization;
+
+    if (authHeader) {
+      const token = authHeader.split(' ')[1]; // Bearer <token>
+      jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) {
+          return res.sendStatus(403); // Forbidden
+        }
+        req.user = user as AuthenticatedRequest['user'];
+        next();
+      });
+    } else {
+      res.sendStatus(401); // Unauthorized
+    }
+  };
+
+  // RBAC Middleware
+  const authorizeRoles = (...allowedRoles: string[]) => {
+    return (req: AuthenticatedRequest, res: Response, next: Function) => {
+      if (!req.user || !req.user.role) {
+        return res.sendStatus(401); // Unauthorized if user or role is not set
+      }
+
+      const rolesArray = allowedRoles;
+      if (!rolesArray.includes(req.user.role)) {
+        return res.sendStatus(403); // Forbidden if role is not allowed
+      }
+      next();
+    };
+  };
+
+  // --- AUTH ROUTES ---
+  app.post("/api/auth/signup", async (req: Request, res: Response) => {
     try {
-      const user = await storage.getCurrentUser();
+      const { username, password, role, name, title, organization, specialty, location, initials } = req.body;
+
+      // Validate role
+      if (!UserRole.options.includes(role)) {
+        return res.status(400).json({ message: "Invalid role provided." });
+      }
+
+      // Basic validation
+      if (!username || !password || !role || !name) {
+        return res.status(400).json({ message: "Username, password, role, and name are required." });
+      }
+
+      const existingUser = await storage.getUserByUsername(username);
+      if (existingUser) {
+        return res.status(400).json({ message: "Username already exists." });
+      }
+
+      // Validate with insertUserSchema (excluding id, which is auto-generated)
+      const parsedData = insertUserSchema.safeParse({
+        username,
+        password, // Raw password, createUser will hash it
+        role,
+        name,
+        title: title || "", // Provide defaults for optional fields if necessary
+        organization: organization || "",
+        specialty: specialty || "",
+        location: location || "",
+        initials: initials || ""
+      });
+
+      if (!parsedData.success) {
+        throw parsedData.error;
+      }
+
+      const newUser = await storage.createUser(parsedData.data);
+
+      const tokenPayload = { id: newUser.id, username: newUser.username, role: newUser.role };
+      const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '1h' });
+
+      res.status(201).json({ token, user: {id: newUser.id, username: newUser.username, name: newUser.name, role: newUser.role } });
+    } catch (err) {
+      handleErrors(err as Error, res);
+    }
+  });
+
+  app.post("/api/auth/login", async (req: Request, res: Response) => {
+    try {
+      const { username, password } = req.body;
+      if (!username || !password) {
+        return res.status(400).json({ message: "Username and password are required." });
+      }
+
+      const user = await storage.getUserByUsername(username);
+      if (!user) {
+        return res.status(401).json({ message: "Invalid credentials." });
+      }
+
+      const isPasswordValid = await storage.verifyPassword(password, user.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({ message: "Invalid credentials." });
+      }
+      
+      const tokenPayload = { id: user.id, username: user.username, role: user.role };
+      const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '1h' });
+
+      // Return only non-sensitive user info
+      const userToReturn = { id: user.id, username: user.username, name: user.name, role: user.role, title: user.title, organization: user.organization, specialty: user.specialty, location: user.location, initials: user.initials, isConnected: user.isConnected };
+
+      res.json({ token, user: userToReturn });
+    } catch (err) {
+      handleErrors(err as Error, res);
+    }
+  });
+
+  // --- USER ROUTES ---
+  // Current user endpoint - now uses JWT
+  app.get("/api/users/current", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      // req.user is populated by authenticateJWT middleware
+      if (!req.user) {
+        return res.status(401).json({ message: "User not authenticated" });
+      }
+      const user = await storage.getUser(req.user.id);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
-      
-      res.json(user);
+      // Return only non-sensitive user info
+      const userToReturn = { id: user.id, username: user.username, name: user.name, role: user.role, title: user.title, organization: user.organization, specialty: user.specialty, location: user.location, initials: user.initials, isConnected: user.isConnected };
+      res.json(userToReturn);
     } catch (err) {
       handleErrors(err as Error, res);
     }
   });
   
-  // Get user colleagues
+  // Get user colleagues - This and subsequent routes still use storage.getCurrentUser()
+  // They would need to be updated to use authenticateJWT and req.user.id in a real scenario
   app.get("/api/users/colleagues", async (req: Request, res: Response) => {
     try {
       const currentUser = await storage.getCurrentUser();
@@ -296,18 +427,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Create post
-  app.post("/api/posts", async (req: Request, res: Response) => {
+  app.post("/api/posts", authenticateJWT, authorizeRoles(UserRole.Values.admin, UserRole.Values.superadmin), async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const currentUser = await storage.getCurrentUser();
-      if (!currentUser) {
-        return res.status(404).json({ message: "User not found" });
+      // User is authenticated and authorized by middleware
+      if (!req.user) { // Should be caught by authenticateJWT, but as a safeguard
+        return res.status(401).json({ message: "User not authenticated for post creation." });
       }
       
       // Validate request body
       const parsedData = insertPostSchema.safeParse({
         title: req.body.title,
         content: req.body.content,
-        authorId: currentUser.id,
+        authorId: req.user.id, // Use authenticated user's ID
         categoryId: parseInt(req.body.categoryId),
         timeAgo: "Just now",
         createdAt: new Date(),
@@ -448,16 +579,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Upload document
-  app.post("/api/documents/upload", upload.single("file"), async (req: Request, res: Response) => {
+  app.post("/api/documents/upload", authenticateJWT, authorizeRoles(UserRole.Values.admin, UserRole.Values.superadmin), upload.single("file"), async (req: AuthenticatedRequest, res: Response) => {
     try {
       const file = req.file;
       if (!file) {
         return res.status(400).json({ message: "No file uploaded" });
       }
       
-      const currentUser = await storage.getCurrentUser();
-      if (!currentUser) {
-        return res.status(404).json({ message: "User not found" });
+      if (!req.user) { // Should be caught by authenticateJWT
+        return res.status(401).json({ message: "User not authenticated for document upload." });
       }
       
       // Get file type from extension
@@ -478,7 +608,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const parsedData = insertDocumentSchema.safeParse({
         filename: file.originalname,
         fileType,
-        ownerId: currentUser.id,
+        ownerId: req.user.id, // Use authenticated user's ID
         timeAgo: "Just now",
         createdAt: new Date(),
         updatedAt: new Date()
@@ -576,11 +706,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  // Get all users
-  app.get("/api/users", async (req: Request, res: Response) => {
+  // Get all users (example of a protected route, though typically you might not protect a generic user list this way without pagination/filtering)
+  app.get("/api/users", authenticateJWT, authorizeRoles(UserRole.Values.admin, UserRole.Values.superadmin), async (req: AuthenticatedRequest, res: Response) => {
     try {
       const users = await storage.getUsers();
-      res.json(users);
+      // Filter out password before sending
+      const usersToReturn = users.map(u => {
+        const { password, ...rest } = u;
+        return rest;
+      });
+      res.json(usersToReturn);
     } catch (err) {
       handleErrors(err as Error, res);
     }

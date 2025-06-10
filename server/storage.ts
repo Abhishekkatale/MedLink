@@ -10,8 +10,10 @@ import {
   postParticipants, PostParticipant, InsertPostParticipant,
   savedPosts, SavedPost, InsertSavedPost,
   connections, Connection, InsertConnection,
-  stats, Stat, InsertStat
+  stats, Stat, InsertStat,
+  UserRole // Import UserRole
 } from "@shared/schema";
+import * as bcrypt from 'bcrypt'; // Import bcrypt
 
 export interface IStorage {
   // User methods
@@ -19,7 +21,8 @@ export interface IStorage {
   getUsersBySpecialty(specialty: string): Promise<User[]>;
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
+  createUser(user: InsertUser): Promise<User>; // InsertUser already includes role
+  verifyPassword(password: string, hash: string): Promise<boolean>; // Add verifyPassword to interface
   getCurrentUser(): Promise<User | undefined>;
   getUserColleagues(userId: number): Promise<User[]>;
   getUserSuggestions(userId: number): Promise<User[]>;
@@ -126,89 +129,97 @@ export class MemStorage implements IStorage {
     const conference = this.createEventType({ name: "Conference", color: "accent/80" });
     
     // Create some users
+    const saltRounds = 10;
     const johnWilson = this.createUser({
       username: "johnwilson",
-      password: "password", // In a real app, this would be hashed
+      password: "password", // Will be hashed by createUser
       name: "Dr. John Wilson",
       title: "Cardiologist",
       organization: "Boston Medical Center",
       specialty: "Cardiology",
       location: "Boston, MA",
       initials: "JW",
-      isConnected: false
+      isConnected: false,
+      role: UserRole.Values.superadmin
     });
 
     this.createUser({
       username: "janedavis",
-      password: "password",
+      password: "password", // Will be hashed by createUser
       name: "Dr. Jane Davis",
       title: "Neurologist",
       organization: "Mass General Hospital",
       specialty: "Neurology",
       location: "Boston, MA",
       initials: "JD",
-      isConnected: true
+      isConnected: true,
+      role: UserRole.Values.admin
     });
 
     this.createUser({
       username: "michaelsmith",
-      password: "password",
+      password: "password", // Will be hashed by createUser
       name: "Dr. Michael Smith",
       title: "Infectious Disease Specialist",
       organization: "Johns Hopkins",
       specialty: "Infectious Disease",
       location: "Baltimore, MD",
       initials: "MS",
-      isConnected: true
+      isConnected: true,
+      role: UserRole.Values.patient
     });
 
     this.createUser({
       username: "rebeccajones",
-      password: "password",
+      password: "password", // Will be hashed by createUser
       name: "Dr. Rebecca Jones",
       title: "Pulmonologist",
       organization: "Cleveland Clinic",
       specialty: "Pulmonology",
       location: "Cleveland, OH",
       initials: "RJ",
-      isConnected: true
+      isConnected: true,
+      role: UserRole.Values.patient
     });
 
     // Add some user suggestions
     this.createUser({
       username: "sarahadams",
-      password: "password",
+      password: "password", // Will be hashed by createUser
       name: "Dr. Sarah Adams",
       title: "Neurologist",
       organization: "Mass General Hospital",
       specialty: "Neurology",
       location: "Boston, MA",
       initials: "SA",
-      isConnected: false
+      isConnected: false,
+      role: UserRole.Values.patient
     });
 
     this.createUser({
       username: "robertlee",
-      password: "password",
+      password: "password", // Will be hashed by createUser
       name: "Dr. Robert Lee",
       title: "Pulmonologist",
       organization: "Cleveland Clinic",
       specialty: "Pulmonology",
       location: "Cleveland, OH",
       initials: "RL",
-      isConnected: false
+      isConnected: false,
+      role: UserRole.Values.patient
     });
 
     this.createUser({
       username: "karenpark",
-      password: "password",
+      password: "password", // Will be hashed by createUser
       name: "Dr. Karen Park",
       title: "Cardiologist",
       organization: "Mayo Clinic",
       specialty: "Cardiology",
       location: "Rochester, MN",
       initials: "KP",
-      isConnected: false
+      isConnected: false,
+      role: UserRole.Values.patient
     });
     
     // Create user profile
@@ -375,9 +386,16 @@ export class MemStorage implements IStorage {
   
   async createUser(user: InsertUser): Promise<User> {
     const id = this.userId++;
-    const newUser = { ...user, id };
+    const saltRounds = 10;
+    const hashedPassword = bcrypt.hashSync(user.password, saltRounds);
+    // The `role` property is part of `InsertUser` type and will be included in `...user`
+    const newUser: User = { ...user, id, password: hashedPassword };
     this.usersData.set(id, newUser);
     return newUser;
+  }
+
+  async verifyPassword(password: string, hash: string): Promise<boolean> {
+    return bcrypt.compareSync(password, hash);
   }
 
   async getCurrentUser(): Promise<User | undefined> {
