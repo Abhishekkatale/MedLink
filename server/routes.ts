@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server, IncomingMessage } from "http";
-import PDFDocument from 'pdfkit';
+// import PDFDocument from 'pdfkit';
 import { storage } from "./storage";
 import { UserRole, updateUserProfileSchema, createCommentSchema } from "@shared/schema"; // Import UserRole, updateUserProfileSchema, and createCommentSchema
 import jwt from 'jsonwebtoken'; // Import jsonwebtoken
@@ -972,191 +972,195 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', 'attachment; filename="prescription.pdf"');
 
-      const doc = new PDFDocument({ size: 'A4', margin: 50, layout: 'portrait' });
+      // PDF Generation is temporarily disabled due to missing pdfkit package.
+      // All PDF generation logic below is currently bypassed.
+      return res.status(501).send("PDF generation is temporarily disabled due to missing pdfkit package.");
+
+      // const doc = new PDFDocument({ size: 'A4', margin: 50, layout: 'portrait' });
 
       // Helper function to draw section titles
-      const drawSectionTitle = (title: string) => {
-        doc.font('Helvetica-Bold').fontSize(14).text(title, { underline: true });
-        doc.moveDown(0.5);
-        doc.font('Helvetica').fontSize(10);
-      };
+      // const drawSectionTitle = (title: string) => {
+      //   doc.font('Helvetica-Bold').fontSize(14).text(title, { underline: true });
+      //   doc.moveDown(0.5);
+      //   doc.font('Helvetica').fontSize(10);
+      // };
 
       // Helper function to draw a line separator
-      const drawLineSeparator = (yOffset = doc.y + 10) => {
-        doc.save();
-        doc.moveTo(doc.page.margins.left, yOffset)
-           .lineTo(doc.page.width - doc.page.margins.right, yOffset)
-           .lineWidth(0.5)
-           .strokeColor('#cccccc')
-           .stroke();
-        doc.restore();
-        doc.moveDown(1); // Add some space after the line
-      };
+      // const drawLineSeparator = (yOffset = doc.y + 10) => {
+      //   doc.save();
+      //   doc.moveTo(doc.page.margins.left, yOffset)
+      //      .lineTo(doc.page.width - doc.page.margins.right, yOffset)
+      //      .lineWidth(0.5)
+      //      .strokeColor('#cccccc')
+      //      .stroke();
+      //   doc.restore();
+      //   doc.moveDown(1); // Add some space after the line
+      // };
 
       // Format date nicely (DD/MM/YYYY)
-      const formatDate = (date: Date) => {
-        const d = new Date(date);
-        let day = d.getDate().toString().padStart(2, '0');
-        let month = (d.getMonth() + 1).toString().padStart(2, '0');
-        const year = d.getFullYear();
-        return `${day}/${month}/${year}`;
-      };
+      // const formatDate = (date: Date) => {
+      //   const d = new Date(date);
+      //   let day = d.getDate().toString().padStart(2, '0');
+      //   let month = (d.getMonth() + 1).toString().padStart(2, '0');
+      //   const year = d.getFullYear();
+      //   return `${day}/${month}/${year}`;
+      // };
 
       // --- Header Section ---
-      doc.font('Helvetica-Bold').fontSize(20).text("MedLink HealthCare", { align: 'center' });
-      doc.font('Helvetica').fontSize(10).text("123 Wellness Avenue, Pune, MH 411001", { align: 'center' });
-      doc.text("Contact: +91 9876543210 | Email: medlink@clinicmail.com", { align: 'center' });
-      doc.moveDown(1);
-      drawLineSeparator(doc.y + 5);
-      doc.moveDown(1);
+      // doc.font('Helvetica-Bold').fontSize(20).text("MedLink HealthCare", { align: 'center' });
+      // doc.font('Helvetica').fontSize(10).text("123 Wellness Avenue, Pune, MH 411001", { align: 'center' });
+      // doc.text("Contact: +91 9876543210 | Email: medlink@clinicmail.com", { align: 'center' });
+      // doc.moveDown(1);
+      // drawLineSeparator(doc.y + 5);
+      // doc.moveDown(1);
 
-      const doctorName = req.user?.name || "Dr. Default"; // Fallback if req.user.name is not available
-      const doctorSpecialty = "General Physician"; // Static as per prompt
-      const doctorRegNo = "MH-145263"; // Static as per prompt
+      // const doctorName = req.user?.name || "Dr. Default"; // Fallback if req.user.name is not available
+      // const doctorSpecialty = "General Physician"; // Static as per prompt
+      // const doctorRegNo = "MH-145263"; // Static as per prompt
 
-      doc.font('Helvetica-Bold').fontSize(12).text(`Dr. ${doctorName}, MD (${doctorSpecialty})`);
-      doc.font('Helvetica').fontSize(10).text(`Reg. No: ${doctorRegNo}`);
-      doc.text(`Date: ${formatDate(new Date())}`);
-      doc.moveDown(1.5);
+      // doc.font('Helvetica-Bold').fontSize(12).text(`Dr. ${doctorName}, MD (${doctorSpecialty})`);
+      // doc.font('Helvetica').fontSize(10).text(`Reg. No: ${doctorRegNo}`);
+      // doc.text(`Date: ${formatDate(new Date())}`);
+      // doc.moveDown(1.5);
 
       // --- Patient Information Section ---
-      drawSectionTitle("Patient Information");
-      doc.text(`Name: ${req.body.patientName || 'N/A'}`);
-      doc.text(`Age / Gender: ${req.body.patientAgeGender || 'N/A'}`);
-      doc.text(`Address: ${req.body.patientAddress || 'N/A'}`);
-      doc.text(`Contact: ${req.body.patientContact || 'N/A'}`);
-      doc.moveDown(1.5);
-      drawLineSeparator(doc.y + 5);
+      // drawSectionTitle("Patient Information");
+      // doc.text(`Name: ${req.body.patientName || 'N/A'}`);
+      // doc.text(`Age / Gender: ${req.body.patientAgeGender || 'N/A'}`);
+      // doc.text(`Address: ${req.body.patientAddress || 'N/A'}`);
+      // doc.text(`Contact: ${req.body.patientContact || 'N/A'}`);
+      // doc.moveDown(1.5);
+      // drawLineSeparator(doc.y + 5);
 
 
       // --- Diagnosis / Symptoms Section ---
-      drawSectionTitle("Diagnosis / Symptoms");
-      doc.text(`Symptoms/Chief Complaints: ${req.body.symptoms || 'N/A'}`);
-      doc.text(`Preliminary Diagnosis: ${req.body.diagnosis || 'N/A'}`);
-      doc.moveDown(1.5);
-      drawLineSeparator(doc.y + 5);
+      // drawSectionTitle("Diagnosis / Symptoms");
+      // doc.text(`Symptoms/Chief Complaints: ${req.body.symptoms || 'N/A'}`);
+      // doc.text(`Preliminary Diagnosis: ${req.body.diagnosis || 'N/A'}`);
+      // doc.moveDown(1.5);
+      // drawLineSeparator(doc.y + 5);
 
       // --- Prescription Table (Rx) ---
-      drawSectionTitle("Rx (Prescription)");
-      const tableTopY = doc.y;
-      const medicinesData = req.body.medicines && Array.isArray(req.body.medicines) && req.body.medicines.length > 0
-        ? req.body.medicines
-        : [
-            { medicineName: "Paracetamol 500mg", dosage: "1 tab", frequency: "1-1-1 (TDS)", duration: "5 Days", specialInstructions: "After food" },
-            { medicineName: "Cough Syrup XYZ", dosage: "2 tsp (10ml)", frequency: "0-0-1 (HS)", duration: "3 days", specialInstructions: "Shake well before use. May cause drowsiness." },
-            { medicineName: "Multivitamin ABC", dosage: "1 capsule", frequency: "1-0-0 (OD)", duration: "30 Days", specialInstructions: "After breakfast" }
-          ];
+      // drawSectionTitle("Rx (Prescription)");
+      // const tableTopY = doc.y;
+      // const medicinesData = req.body.medicines && Array.isArray(req.body.medicines) && req.body.medicines.length > 0
+      //   ? req.body.medicines
+      //   : [
+      //       { medicineName: "Paracetamol 500mg", dosage: "1 tab", frequency: "1-1-1 (TDS)", duration: "5 Days", specialInstructions: "After food" },
+      //       { medicineName: "Cough Syrup XYZ", dosage: "2 tsp (10ml)", frequency: "0-0-1 (HS)", duration: "3 days", specialInstructions: "Shake well before use. May cause drowsiness." },
+      //       { medicineName: "Multivitamin ABC", dosage: "1 capsule", frequency: "1-0-0 (OD)", duration: "30 Days", specialInstructions: "After breakfast" }
+      //     ];
 
-      const drawRxTable = (data: any[], startY: number) => {
-        let y = startY;
-        const rowHeight = 25; // Approximate row height, can be dynamic
-        const leftMargin = doc.page.margins.left;
-        const tableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      // const drawRxTable = (data: any[], startY: number) => {
+      //   let y = startY;
+      //   const rowHeight = 25; // Approximate row height, can be dynamic
+      //   const leftMargin = doc.page.margins.left;
+      //   const tableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
 
-        const colWidths = {
-          medicineName: tableWidth * 0.30,
-          dosage: tableWidth * 0.15,
-          frequency: tableWidth * 0.15,
-          duration: tableWidth * 0.15,
-          specialInstructions: tableWidth * 0.25
-        };
+      //   const colWidths = {
+      //     medicineName: tableWidth * 0.30,
+      //     dosage: tableWidth * 0.15,
+      //     frequency: tableWidth * 0.15,
+      //     duration: tableWidth * 0.15,
+      //     specialInstructions: tableWidth * 0.25
+      //   };
 
-        const headers = ["Medicine Name", "Dosage", "Frequency", "Duration", "Instructions"];
-        const colKeys = ["medicineName", "dosage", "frequency", "duration", "specialInstructions"];
+      //   const headers = ["Medicine Name", "Dosage", "Frequency", "Duration", "Instructions"];
+      //   const colKeys = ["medicineName", "dosage", "frequency", "duration", "specialInstructions"];
 
-        // Draw Table Header
-        doc.font('Helvetica-Bold').fontSize(9);
-        let currentX = leftMargin;
-        headers.forEach((header, i) => {
-          const key = colKeys[i] as keyof typeof colWidths;
-          doc.text(header, currentX + 5, y + 5, { width: colWidths[key] - 10, align: 'left' });
-          doc.rect(currentX, y, colWidths[key], rowHeight).stroke();
-          currentX += colWidths[key];
-        });
-        y += rowHeight;
+      //   // Draw Table Header
+      //   doc.font('Helvetica-Bold').fontSize(9);
+      //   let currentX = leftMargin;
+      //   headers.forEach((header, i) => {
+      //     const key = colKeys[i] as keyof typeof colWidths;
+      //     doc.text(header, currentX + 5, y + 5, { width: colWidths[key] - 10, align: 'left' });
+      //     doc.rect(currentX, y, colWidths[key], rowHeight).stroke();
+      //     currentX += colWidths[key];
+      //   });
+      //   y += rowHeight;
 
-        // Draw Table Rows
-        doc.font('Helvetica').fontSize(9);
-        data.forEach(row => {
-          currentX = leftMargin;
-          let maxHeightInRow = rowHeight; // Default height
+      //   // Draw Table Rows
+      //   doc.font('Helvetica').fontSize(9);
+      //   data.forEach(row => {
+      //     currentX = leftMargin;
+      //     let maxHeightInRow = rowHeight; // Default height
 
-          // Calculate max height needed for this row (for text wrapping)
-          // This is a simplified approach; true dynamic height is complex with pdfkit's streaming nature
-          colKeys.forEach(key => {
-            const text = row[key] || '';
-            const colWidth = colWidths[key as keyof typeof colWidths];
-            const textHeight = doc.heightOfString(text, { width: colWidth - 10 });
-            if (textHeight > maxHeightInRow) maxHeightInRow = textHeight + 10; // Add padding
-          });
-          if (maxHeightInRow < rowHeight) maxHeightInRow = rowHeight;
-
-
-          // Check for page overflow BEFORE drawing the row
-          if (y + maxHeightInRow > doc.page.height - doc.page.margins.bottom) {
-            doc.addPage();
-            y = doc.page.margins.top;
-            // Redraw headers on new page
-            doc.font('Helvetica-Bold').fontSize(9);
-            currentX = leftMargin;
-            headers.forEach((header, i) => {
-                const key = colKeys[i] as keyof typeof colWidths;
-                doc.text(header, currentX + 5, y + 5, { width: colWidths[key] - 10, align: 'left' });
-                doc.rect(currentX, y, colWidths[key], rowHeight).stroke();
-                currentX += colWidths[key];
-            });
-            y += rowHeight;
-            doc.font('Helvetica').fontSize(9); // Switch back to regular font for content
-          }
+      //     // Calculate max height needed for this row (for text wrapping)
+      //     // This is a simplified approach; true dynamic height is complex with pdfkit's streaming nature
+      //     colKeys.forEach(key => {
+      //       const text = row[key] || '';
+      //       const colWidth = colWidths[key as keyof typeof colWidths];
+      //       const textHeight = doc.heightOfString(text, { width: colWidth - 10 });
+      //       if (textHeight > maxHeightInRow) maxHeightInRow = textHeight + 10; // Add padding
+      //     });
+      //     if (maxHeightInRow < rowHeight) maxHeightInRow = rowHeight;
 
 
-          currentX = leftMargin;
-          colKeys.forEach(key => {
-            const text = row[key as keyof typeof row] || 'N/A';
-            doc.text(text, currentX + 5, y + 5, { width: colWidths[key as keyof typeof colWidths] - 10, align: 'left' });
-            doc.rect(currentX, y, colWidths[key as keyof typeof colWidths], maxHeightInRow).stroke();
-            currentX += colWidths[key as keyof typeof colWidths];
-          });
-          y += maxHeightInRow;
-        });
-        doc.y = y; // Update global Y position
-      };
+      //     // Check for page overflow BEFORE drawing the row
+      //     if (y + maxHeightInRow > doc.page.height - doc.page.margins.bottom) {
+      //       doc.addPage();
+      //       y = doc.page.margins.top;
+      //       // Redraw headers on new page
+      //       doc.font('Helvetica-Bold').fontSize(9);
+      //       currentX = leftMargin;
+      //       headers.forEach((header, i) => {
+      //           const key = colKeys[i] as keyof typeof colWidths;
+      //           doc.text(header, currentX + 5, y + 5, { width: colWidths[key] - 10, align: 'left' });
+      //           doc.rect(currentX, y, colWidths[key], rowHeight).stroke();
+      //           currentX += colWidths[key];
+      //       });
+      //       y += rowHeight;
+      //       doc.font('Helvetica').fontSize(9); // Switch back to regular font for content
+      //     }
 
-      drawRxTable(medicinesData, tableTopY);
-      doc.moveDown(1.5);
-      drawLineSeparator(doc.y + 5);
+
+      //     currentX = leftMargin;
+      //     colKeys.forEach(key => {
+      //       const text = row[key as keyof typeof row] || 'N/A';
+      //       doc.text(text, currentX + 5, y + 5, { width: colWidths[key as keyof typeof colWidths] - 10, align: 'left' });
+      //       doc.rect(currentX, y, colWidths[key as keyof typeof colWidths], maxHeightInRow).stroke();
+      //       currentX += colWidths[key as keyof typeof colWidths];
+      //     });
+      //     y += maxHeightInRow;
+      //   });
+      //   doc.y = y; // Update global Y position
+      // };
+
+      // drawRxTable(medicinesData, tableTopY);
+      // doc.moveDown(1.5);
+      // drawLineSeparator(doc.y + 5);
 
       // --- Additional Notes Section ---
-      drawSectionTitle("Additional Notes");
-      doc.text(`Diet Advice / Lifestyle Notes: ${req.body.dietAdvice || 'None'}`);
-      doc.text(`Next Visit Date: ${req.body.nextVisitDate || 'As needed'}`);
-      doc.moveDown(1.5);
+      // drawSectionTitle("Additional Notes");
+      // doc.text(`Diet Advice / Lifestyle Notes: ${req.body.dietAdvice || 'None'}`);
+      // doc.text(`Next Visit Date: ${req.body.nextVisitDate || 'As needed'}`);
+      // doc.moveDown(1.5);
 
       // --- Footer Section ---
       // Position footer at the bottom. This is an approximation.
       // For a true sticky footer, complex calculations or direct Y positioning on last page is needed.
-      const footerY = doc.page.height - doc.page.margins.bottom - 60; // Adjust 60 as needed
+      // const footerY = doc.page.height - doc.page.margins.bottom - 60; // Adjust 60 as needed
 
       // Check if there's enough space for footer, otherwise add new page
       // This is a simple check, might need refinement for multi-page docs
-      if (doc.y > footerY - 20) { // If current y is too close to where footer should start
+      // if (doc.y > footerY - 20) { // If current y is too close to where footer should start
          // doc.addPage(); // This might be too aggressive if content just slightly overruns
          // For now, let it draw where it is, or slightly lower.
-      }
-      doc.y = Math.max(doc.y, footerY - 50); // Ensure footer doesn't overlap content too much
+      // }
+      // doc.y = Math.max(doc.y, footerY - 50); // Ensure footer doesn't overlap content too much
 
-      drawLineSeparator(doc.y + 10);
-      doc.moveDown(2);
+      // drawLineSeparator(doc.y + 10);
+      // doc.moveDown(2);
 
-      const signatureX = doc.page.width - doc.page.margins.right - 200;
-      doc.font('Helvetica').fontSize(10).text("Doctor's Signature", signatureX, doc.y, { width: 180, align: 'right' });
-      doc.moveTo(signatureX - 20, doc.y - 5).lineTo(doc.page.width - doc.page.margins.right, doc.y - 5).stroke(); // Line for signature
-      doc.moveDown(2);
+      // const signatureX = doc.page.width - doc.page.margins.right - 200;
+      // doc.font('Helvetica').fontSize(10).text("Doctor's Signature", signatureX, doc.y, { width: 180, align: 'right' });
+      // doc.moveTo(signatureX - 20, doc.y - 5).lineTo(doc.page.width - doc.page.margins.right, doc.y - 5).stroke(); // Line for signature
+      // doc.moveDown(2);
 
-      doc.fontSize(8).text("This is a digital prescription. Valid for pharmacy use.", doc.page.margins.left, doc.page.height - doc.page.margins.bottom + 10, { align: 'center' });
+      // doc.fontSize(8).text("This is a digital prescription. Valid for pharmacy use.", doc.page.margins.left, doc.page.height - doc.page.margins.bottom + 10, { align: 'center' });
 
-      doc.pipe(res);
-      doc.end();
+      // doc.pipe(res);
+      // doc.end();
 
     } catch (err) {
       console.error("Error generating PDF:", err);
@@ -1171,39 +1175,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // --- DASHBOARD ROUTES ---
+  // Part 1: Doctor Dashboard APIs
+  app.get("/api/dashboard/doctor/student-connection-requests", authenticateJWT, authorizeRoles(UserRole.enum.Doctor), async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "User not authenticated" });
+      const doctorId = req.user.id;
+
+      // Fetch pending connections where the current doctor is the recipient
+      const pendingConnections = await storage.getConnectionsForUser(doctorId, 'pending');
+
+      // Filter for requests initiated by students
+      // The `getConnectionsForUser` should populate `user` (initiator) and `connectedUser` (recipient)
+      const studentRequests = pendingConnections.filter(conn =>
+        conn.userId !== doctorId && // Ensure the doctor is the recipient (connectedUserId)
+        conn.user?.role === UserRole.enum.Student
+      );
+
+      res.json(studentRequests);
+    } catch (err) {
+      handleErrors(err as Error, res);
+    }
+  });
+
+  app.get("/api/dashboard/doctor/appointments", authenticateJWT, authorizeRoles(UserRole.enum.Doctor), async (req: AuthenticatedRequest, res: Response) => {
+    // Placeholder for Doctor's appointments
+    res.json({ message: "Appointments endpoint for Doctors - to be implemented", appointments: [] });
+  });
+
+  app.get("/api/dashboard/doctor/messages", authenticateJWT, authorizeRoles(UserRole.enum.Doctor), async (req: AuthenticatedRequest, res: Response) => {
+    // Placeholder for Doctor's messages
+    res.json({ message: "Messages endpoint for Doctors - to be implemented", messages: [] });
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }
-
-// --- DASHBOARD ROUTES ---
-// Part 1: Doctor Dashboard APIs
-app.get("/api/dashboard/doctor/student-connection-requests", authenticateJWT, authorizeRoles(UserRole.enum.Doctor), async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    if (!req.user) return res.status(401).json({ message: "User not authenticated" });
-    const doctorId = req.user.id;
-
-    // Fetch pending connections where the current doctor is the recipient
-    const pendingConnections = await storage.getConnectionsForUser(doctorId, 'pending');
-
-    // Filter for requests initiated by students
-    // The `getConnectionsForUser` should populate `user` (initiator) and `connectedUser` (recipient)
-    const studentRequests = pendingConnections.filter(conn =>
-      conn.userId !== doctorId && // Ensure the doctor is the recipient (connectedUserId)
-      conn.user?.role === UserRole.enum.Student
-    );
-
-    res.json(studentRequests);
-  } catch (err) {
-    handleErrors(err as Error, res);
-  }
-});
-
-app.get("/api/dashboard/doctor/appointments", authenticateJWT, authorizeRoles(UserRole.enum.Doctor), async (req: AuthenticatedRequest, res: Response) => {
-  // Placeholder for Doctor's appointments
-  res.json({ message: "Appointments endpoint for Doctors - to be implemented", appointments: [] });
-});
-
-app.get("/api/dashboard/doctor/messages", authenticateJWT, authorizeRoles(UserRole.enum.Doctor), async (req: AuthenticatedRequest, res: Response) => {
-  // Placeholder for Doctor's messages
-  res.json({ message: "Messages endpoint for Doctors - to be implemented", messages: [] });
-});
