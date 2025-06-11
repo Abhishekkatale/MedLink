@@ -129,7 +129,6 @@ export const likes = pgTable("likes", {
   postId: integer("post_id").references(() => posts.id, { onDelete: 'cascade' }).notNull(),
   userId: integer("user_id").references(() => users.id, { onDelete: 'cascade' }).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  // TODO: Add unique constraint for (postId, userId) in the migration or using db.execute for custom SQL
 });
 
 // Comments schema
