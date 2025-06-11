@@ -28,16 +28,19 @@ app.use((req, res, next) => {
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
-      if (logLine.length > 80) {
-        logLine = logLine.slice(0, 79) + "…";
-      }
-
-      log(logLine);
+      const logObject = {
+        timestamp: new Date().toISOString(),
+        method: req.method,
+        path: req.path, // or path variable from above
+        statusCode: res.statusCode,
+        durationMs: duration,
+        ip: req.ip || req.socket?.remoteAddress,
+        userAgent: req.headers['user-agent'],
+        requestQuery: req.query,
+        requestParams: req.params,
+        responseBody: capturedJsonResponse, // Can be large, consider summarization/truncation if needed
+      };
+      log(JSON.stringify(logObject));
     }
   });
 

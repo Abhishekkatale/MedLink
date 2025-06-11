@@ -198,7 +198,7 @@ export class DrizzleStorage implements IStorage {
 
   async createUser(user: InsertUser): Promise<User> {
     const saltRounds = 10;
-    const hashedPassword = bcrypt.hashSync(user.password, saltRounds);
+    const hashedPassword = await bcrypt.hash(user.password, saltRounds);
 
     // InsertUser is Zod-based. Drizzle's insert type is InferInsertModel.
     // Ensure all fields in 'user' (an InsertUser) match what 'schema.users' expects.
@@ -209,12 +209,21 @@ export class DrizzleStorage implements IStorage {
       role: user.role as typeof schema.users.role.enumValues[number],
     };
 
-    const result = await this.db.insert(schema.users).values(newUserPayload).returning();
-    return result[0] as User;
+    try {
+      const result = await this.db.insert(schema.users).values(newUserPayload).returning();
+      return result[0] as User;
+    } catch (error: any) {
+      console.error("Error in createUser:", error, "Input user:", user);
+      if (error.code === '23505' && error.constraint === 'users_username_unique') { // Specific to PostgreSQL for unique constraint
+        // Consider throwing a custom error or a more specific error message
+        console.error("Username already exists:", user.username);
+      }
+      throw error; // Re-throw the original error
+    }
   }
 
   async verifyPassword(password: string, hash: string): Promise<boolean> {
-    return bcrypt.compareSync(password, hash);
+    return await bcrypt.compare(password, hash);
   }
 
   // getCurrentUser() removed from IStorage and DrizzleStorage.
@@ -293,8 +302,18 @@ export class DrizzleStorage implements IStorage {
       status: "pending", // Default status
       // createdAt is defaultNow() in schema
     };
-    const result = await this.db.insert(schema.connections).values(newConnectionPayload).returning();
-    return result[0] as Connection;
+    try {
+      const result = await this.db.insert(schema.connections).values(newConnectionPayload).returning();
+      return result[0] as Connection;
+    } catch (error: any) {
+      console.error("Error in createConnection:", error, "Payload:", newConnectionPayload);
+      if (error.code === '23503') { // Foreign key violation
+        console.error("Foreign key violation in createConnection. Ensure userId and connectedUserId exist.");
+      } else if (error.code === '23505') { // Unique constraint violation (if any)
+        console.error("Unique constraint violation in createConnection.");
+      }
+      throw error; // Re-throw the original error
+    }
   }
 
   // Profile methods
@@ -330,7 +349,7 @@ export class DrizzleStorage implements IStorage {
   // This is a partial implementation to fit within reasonable limits for a single step.
   // The remaining methods would follow similar patterns.
 
-  async getPosts(currentUserId: number | undefined, filter?: string, searchTerm?: string, categoryId?: string): Promise<Post[]> {
+  async getPosts(currentUserId: number | undefined, filter?: string, searchTerm?: string, categoryId?: string): Promise<any[]> { // Changed return type
     const conditions = [];
     if (categoryId && categoryId !== "all") {
       conditions.push(eq(schema.posts.categoryId, parseInt(categoryId)));
@@ -344,24 +363,90 @@ export class DrizzleStorage implements IStorage {
         )
       );
     }
-    
-    if (filter === "saved" && currentUserId) {
-        const savedPostRelations = await this.db.query.savedPosts.findMany({
-            where: eq(schema.savedPosts.userId, currentUserId)
-        });
-        const savedPostIds = savedPostRelations.map(sp => sp.postId);
-        if (savedPostIds.length === 0) return []; // No saved posts for this user, return empty
-        conditions.push(sql`${schema.posts.id} in ${savedPostIds}`);
-    } else if (filter === "saved" && !currentUserId) {
-        // Cannot get saved posts without a user context
-        return [];
+
+    let postQuery = this.db.query.posts.findMany({
+      where: conditions.length > 0 ? and(...conditions) : undefined,
+      with: {
+        author: true,
+        category: true,
+        // postParticipants will be fetched later in bulk for all posts
+        // savedPosts will be fetched later for the current user if provided
+      },
+      orderBy: [desc(schema.posts.createdAt)],
+    });
+
+    let fetchedPosts = await postQuery;
+
+    // Handle "saved" filter specifically
+    if (filter === "saved") {
+      if (!currentUserId) return []; // Cannot get saved posts without user context
+      const savedPostEntries = await this.db.query.savedPosts.findMany({
+        where: eq(schema.savedPosts.userId, currentUserId),
+        columns: { postId: true }
+      });
+      const savedPostIds = new Set(savedPostEntries.map(sp => sp.postId));
+      if (savedPostIds.size === 0) return [];
+
+      // Filter the already fetched posts by savedPostIds
+      // Or, if performance is critical and many posts, re-fetch with IDs:
+      // conditions.push(sql`${schema.posts.id} in ${Array.from(savedPostIds)}`);
+      // postQuery = this.db.query.posts.findMany({ where: and(...conditions), with: { author: true, category: true }, orderBy: [desc(schema.posts.createdAt)] });
+      // fetchedPosts = await postQuery;
+      fetchedPosts = fetchedPosts.filter(p => savedPostIds.has(p.id));
     }
 
-    const queryOptions = conditions.length > 0 ? { where: and(...conditions) } : {orderBy: [desc(schema.posts.createdAt)]};
-    if (conditions.length > 0) {
-      (queryOptions as any).orderBy = [desc(schema.posts.createdAt)]; // Add orderBy if where exists
+    if (fetchedPosts.length === 0) return [];
+
+    const postIds = fetchedPosts.map(p => p.id);
+
+    // Fetch postParticipants for all posts
+    const allParticipantsEntries = await this.db.query.postParticipants.findMany({
+      where: sql`${schema.postParticipants.postId} IN ${postIds}`,
+      with: {
+        user: {
+          columns: { // Select only necessary user fields for participants
+            id: true,
+            initials: true,
+            specialty: true,
+            // Add other fields if needed by getColorClass or frontend
+          }
+        }
+      }
+    });
+
+    const participantsByPostId = new Map<number, User[]>();
+    allParticipantsEntries.forEach(ppe => {
+      if (!participantsByPostId.has(ppe.postId)) {
+        participantsByPostId.set(ppe.postId, []);
+      }
+      // Ensure ppe.user is not null and is of type User
+      if (ppe.user) {
+        participantsByPostId.get(ppe.postId)!.push(ppe.user as User);
+      }
+    });
+
+    // Determine saved status for all posts if currentUserId is available
+    let savedPostIdsForUser = new Set<number>();
+    if (currentUserId) {
+      const userSavedEntries = await this.db.query.savedPosts.findMany({
+        where: eq(schema.savedPosts.userId, currentUserId),
+        columns: { postId: true }
+      });
+      savedPostIdsForUser = new Set(userSavedEntries.map(sp => sp.postId));
     }
-    return this.db.query.posts.findMany(queryOptions) as Promise<Post[]>;
+
+    // Augment posts with participants and saved status
+    const postsWithDetails = fetchedPosts.map(post => {
+      const participants = participantsByPostId.get(post.id) || [];
+      return {
+        ...post,
+        // author and category are already included from the initial query
+        postParticipants: participants, // Renaming to avoid conflict if Post type has 'participants'
+        saved: currentUserId ? savedPostIdsForUser.has(post.id) : false,
+      };
+    });
+
+    return postsWithDetails;
   }
 
   async getPost(id: number): Promise<Post | undefined> {
@@ -376,8 +461,16 @@ export class DrizzleStorage implements IStorage {
         authorId: authorId, // Set authorId from parameter
         // timeAgo, createdAt, updatedAt handled by schema or will be part of 'post'
     };
-    const result = await this.db.insert(schema.posts).values(postPayload).returning();
-    return result[0] as Post;
+    try {
+      const result = await this.db.insert(schema.posts).values(postPayload).returning();
+      return result[0] as Post;
+    } catch (error: any) {
+      console.error("Error in createPost:", error, "Payload:", postPayload);
+      if (error.code === '23503') { // Foreign key violation
+        console.error("Foreign key violation in createPost. Ensure authorId and categoryId (if provided) exist.");
+      }
+      throw error; // Re-throw the original error
+    }
   }
 
   async savePost(currentUserId: number, postId: number, isSaved: boolean): Promise<void> {
@@ -420,7 +513,7 @@ export class DrizzleStorage implements IStorage {
     return result[0] as Category;
   }
 
-  async getDocuments(currentUserId: number | undefined, filter?: string, searchTerm?: string): Promise<Document[]> {
+  async getDocuments(currentUserId: number | undefined, filter?: string, searchTerm?: string): Promise<any[]> { // Changed return type
     const conditions = [];
     if (searchTerm) {
       const term = `%${searchTerm.toLowerCase()}%`;
@@ -428,26 +521,64 @@ export class DrizzleStorage implements IStorage {
     }
 
     if (filter === "shared-by-me" && currentUserId) {
-        conditions.push(eq(schema.documents.ownerId, currentUserId));
+      conditions.push(eq(schema.documents.ownerId, currentUserId));
     } else if (filter === "shared-with-me" && currentUserId) {
-        const sharedDocsRelations = await this.db.query.documentSharing.findMany({
-            where: eq(schema.documentSharing.userId, currentUserId)
-        });
-        const sharedDocIds = sharedDocsRelations.map(sd => sd.documentId);
-        if (sharedDocIds.length === 0) return []; // No documents shared with this user
-        conditions.push(sql`${schema.documents.id} in ${sharedDocIds}`);
+      const sharedDocsRelations = await this.db.query.documentSharing.findMany({
+        where: eq(schema.documentSharing.userId, currentUserId),
+        columns: { documentId: true }
+      });
+      const sharedDocIds = sharedDocsRelations.map(sd => sd.documentId);
+      if (sharedDocIds.length === 0) return [];
+      conditions.push(sql`${schema.documents.id} IN ${sharedDocIds}`);
     } else if ((filter === "shared-by-me" || filter === "shared-with-me") && !currentUserId) {
-        // Cannot get user-specific documents without a user context
-        return [];
+      return [];
     } else if (filter && filter !== "all") { // Assuming filter is fileType
-        conditions.push(eq(sql`lower(${schema.documents.fileType})`, filter.toLowerCase()));
+      conditions.push(eq(sql`lower(${schema.documents.fileType})`, filter.toLowerCase()));
     }
-    
-    const queryOptions = conditions.length > 0 ? { where: and(...conditions) } : {orderBy: [desc(schema.documents.createdAt)]};
-    if (conditions.length > 0) {
-      (queryOptions as any).orderBy = [desc(schema.documents.createdAt)];
-    }
-    return this.db.query.documents.findMany(queryOptions) as Promise<Document[]>;
+
+    const fetchedDocuments = await this.db.query.documents.findMany({
+      where: conditions.length > 0 ? and(...conditions) : undefined,
+      orderBy: [desc(schema.documents.createdAt)],
+      // Eager load owner if needed, but not strictly for sharedUsers optimization here
+      // with: { owner: true }
+    });
+
+    if (fetchedDocuments.length === 0) return [];
+
+    const documentIds = fetchedDocuments.map(doc => doc.id);
+
+    // Fetch documentSharing entries for all retrieved documents, with user details
+    const allDocumentSharings = await this.db.query.documentSharing.findMany({
+      where: sql`${schema.documentSharing.documentId} IN ${documentIds}`,
+      with: {
+        user: { // This 'user' is from documentSharingRelations
+          columns: {
+            id: true,
+            initials: true,
+            specialty: true,
+            // Add other fields if needed for frontend transformation
+          }
+        }
+      }
+    });
+
+    const sharedUsersByDocId = new Map<number, User[]>();
+    allDocumentSharings.forEach(ds => {
+      if (!sharedUsersByDocId.has(ds.documentId)) {
+        sharedUsersByDocId.set(ds.documentId, []);
+      }
+      if (ds.user) { // Ensure user is not null
+        sharedUsersByDocId.get(ds.documentId)!.push(ds.user as User);
+      }
+    });
+
+    // Augment documents with their shared users
+    const documentsWithSharedUsers = fetchedDocuments.map(doc => ({
+      ...doc,
+      sharedUsers: sharedUsersByDocId.get(doc.id) || [],
+    }));
+
+    return documentsWithSharedUsers;
   }
 
   async getDocument(id: number): Promise<Document | undefined> {
