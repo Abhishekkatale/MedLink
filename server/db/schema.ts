@@ -214,15 +214,3 @@ export const connectionRelations = relations(connections, ({ one }) => ({
   user: one(users, {fields: [connections.userId], references: [users.id], relationName: 'initiatedConnections'}),
   connectedUser: one(users, {fields: [connections.connectedUserId], references: [users.id], relationName: 'receivedConnections'}),
 }));
-
-// It's also good practice to define relations here for Drizzle ORM,
-// though it's not strictly required for migration generation.
-// For example:
-// import { relations } from 'drizzle-orm';
-// export const userRelations = relations(users, ({ many }) => ({
-//   posts: many(posts),
-//   documents: many(documents),
-//   profiles: many(profiles),
-// }));
-// This would be more for actual ORM querying convenience.
-// For this step, focusing on table structure for migration.

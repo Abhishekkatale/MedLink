@@ -345,7 +345,6 @@ export class DrizzleStorage implements IStorage {
     return result[0] as Profile | undefined;
   }
 
-  // TODO: Implement other methods (Posts, Categories, Documents, Events, Stats, etc.)
   // This is a partial implementation to fit within reasonable limits for a single step.
   // The remaining methods would follow similar patterns.
 
