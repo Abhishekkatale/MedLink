@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 const LoginPage: React.FC = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false); // Added rememberMe state
   const [error, setError] = useState<string | null>(null);
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -16,7 +17,7 @@ const LoginPage: React.FC = () => {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, rememberMe }), // Added rememberMe to payload
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Failed to login');

@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server, IncomingMessage } from "http";
 import { storage } from "./storage";
-import { UserRole } from "@shared/schema"; // Import UserRole
+import { UserRole, updateUserProfileSchema, createCommentSchema } from "@shared/schema"; // Import UserRole, updateUserProfileSchema, and createCommentSchema
 import jwt from 'jsonwebtoken'; // Import jsonwebtoken
 import multer from "multer";
 import path from "path";
@@ -142,7 +142,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     try {
-      const { username, password } = req.body;
+      const { username, password, rememberMe } = req.body; // Added rememberMe
       if (!username || !password) {
         return res.status(400).json({ message: "Username and password are required." });
       }
@@ -158,7 +158,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const tokenPayload = { id: user.id, username: user.username, role: user.role };
-      const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '1h' });
+      // Adjust token expiration based on rememberMe
+      const expiresIn = rememberMe ? '7d' : '1h'; // 7 days if rememberMe is true, else 1 hour
+      const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn });
 
       // Return only non-sensitive user info
       const userToReturn = { id: user.id, username: user.username, name: user.name, role: user.role, title: user.title, organization: user.organization, specialty: user.specialty, location: user.location, initials: user.initials, isConnected: user.isConnected };
@@ -191,14 +193,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Get user colleagues - This and subsequent routes still use storage.getCurrentUser()
   // They would need to be updated to use authenticateJWT and req.user.id in a real scenario
-  app.get("/api/users/colleagues", async (req: Request, res: Response) => {
+  app.get("/api/users/colleagues", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const currentUser = await storage.getCurrentUser();
-      if (!currentUser) {
-        return res.status(404).json({ message: "User not found" });
+      if (!req.user) {
+        return res.status(401).json({ message: "User not authenticated" });
       }
       
-      const colleagues = await storage.getUserColleagues(currentUser.id);
+      const colleagues = await storage.getUserColleagues(req.user.id);
       
       // Transform data for frontend
       const colleaguesDisplay = colleagues.map(colleague => ({
@@ -215,14 +216,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Get user suggestions
-  app.get("/api/users/suggestions", async (req: Request, res: Response) => {
+  app.get("/api/users/suggestions", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const currentUser = await storage.getCurrentUser();
-      if (!currentUser) {
-        return res.status(404).json({ message: "User not found" });
+      if (!req.user) {
+        return res.status(401).json({ message: "User not authenticated" });
       }
       
-      const suggestions = await storage.getUserSuggestions(currentUser.id);
+      const suggestions = await storage.getUserSuggestions(req.user.id);
       
       // Transform data for frontend
       const sugsTransformed = suggestions.map(user => ({
@@ -242,25 +242,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Get user profile
-  app.get("/api/users/profile", async (req: Request, res: Response) => {
+  app.get("/api/users/profile", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const currentUser = await storage.getCurrentUser();
-      if (!currentUser) {
+      if (!req.user) {
+        return res.status(401).json({ message: "User not authenticated" });
+      }
+      // Fetch the full user details for the profile page based on authenticated user's ID
+      const userForProfile = await storage.getUser(req.user.id);
+      if (!userForProfile) {
         return res.status(404).json({ message: "User not found" });
       }
       
-      const profile = await storage.getProfile(currentUser.id);
+      const profile = await storage.getProfile(req.user.id);
       if (!profile) {
-        return res.status(404).json({ message: "Profile not found" });
+        // It's possible a user might not have a profile entry yet.
+        // Depending on requirements, either return 404 or a default/partial profile.
+        // For now, let's assume a profile entry should exist or this is an issue.
+        return res.status(404).json({ message: "Profile not found for this user." });
       }
       
       // Combine user and profile data
       const userProfile = {
-        ...profile,
-        name: currentUser.name,
-        title: currentUser.title,
-        organization: currentUser.organization,
-        initials: currentUser.initials
+        ...profile, // Spread profile data first
+        name: userForProfile.name, // Then override/add user-specific data
+        title: userForProfile.title,
+        organization: userForProfile.organization,
+        initials: userForProfile.initials
+        // Add any other fields from `userForProfile` needed by the frontend profile page
       };
       
       res.json(userProfile);
@@ -268,16 +276,81 @@ export async function registerRoutes(app: Express): Promise<Server> {
       handleErrors(err as Error, res);
     }
   });
+
+  // Update user profile
+  app.put("/api/users/profile", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ message: "User not authenticated" });
+      }
+
+      const validationResult = updateUserProfileSchema.safeParse(req.body);
+      if (!validationResult.success) {
+        // Use fromZodError to create a user-friendly error message if you want
+        // For now, just sending the raw errors
+        return res.status(400).json({ message: "Invalid data provided", errors: validationResult.error.flatten() });
+      }
+
+      const validatedData = validationResult.data;
+
+      // Ensure no forbidden fields are passed, though Zod schema should handle this.
+      // The updateUser method in storage also prevents updating role, password, etc.
+      const updatedUser = await storage.updateUser(req.user.id, validatedData);
+
+      if (!updatedUser) {
+        return res.status(404).json({ message: "User not found or update failed" });
+      }
+
+      // Return only non-sensitive user info
+      const { password, ...userToReturn } = updatedUser;
+      res.json(userToReturn);
+
+    } catch (err) {
+      handleErrors(err as Error, res);
+    }
+  });
+
+  // Profile picture upload route
+  app.post("/api/users/profile/picture", authenticateJWT, upload.single('profilePicture'), async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ message: "User not authenticated" });
+      }
+      if (!req.file) {
+        return res.status(400).json({ message: "No profile picture file uploaded." });
+      }
+
+      const fileUrl = `/uploads/${req.file.filename}`; // Construct file URL
+
+      // Update user's profilePictureUrl in the database
+      const updatedUser = await storage.updateUser(req.user.id, { profilePictureUrl: fileUrl });
+
+      if (!updatedUser) {
+        // This case should ideally not happen if user is authenticated and updateUser works
+        return res.status(404).json({ message: "User not found or update failed after upload." });
+      }
+
+      // Return the new profile picture URL and/or the updated user object (excluding sensitive info)
+      const { password, ...userToReturn } = updatedUser;
+      res.json({
+        message: "Profile picture updated successfully.",
+        profilePictureUrl: fileUrl,
+        user: userToReturn
+      });
+
+    } catch (err) {
+      handleErrors(err as Error, res);
+    }
+  });
   
   // Get connection requests
-  app.get("/api/users/connection-requests", async (req: Request, res: Response) => {
+  app.get("/api/users/connection-requests", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const currentUser = await storage.getCurrentUser();
-      if (!currentUser) {
-        return res.status(404).json({ message: "User not found" });
+      if (!req.user) {
+        return res.status(401).json({ message: "User not authenticated" });
       }
       
-      const requests = await storage.getConnectionRequests(currentUser.id);
+      const requests = await storage.getConnectionRequests(req.user.id);
       res.json(requests);
     } catch (err) {
       handleErrors(err as Error, res);
@@ -285,16 +358,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Create connection
-  app.post("/api/connections/connect", async (req: Request, res: Response) => {
+  app.post("/api/connections/connect", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const currentUser = await storage.getCurrentUser();
-      if (!currentUser) {
-        return res.status(404).json({ message: "User not found" });
+      if (!req.user) {
+        return res.status(401).json({ message: "User not authenticated" });
       }
       
       const parsedData = insertConnectionSchema.safeParse({
-        userId: currentUser.id,
-        connectedUserId: req.body.userId,
+        userId: req.user.id, // Initiator of the connection
+        connectedUserId: req.body.userId, // Target user ID from request body
         status: "pending"
       });
       
@@ -303,7 +375,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const connection = await storage.createConnection(
-        currentUser.id,
+        req.user.id,
         req.body.userId
       );
       
@@ -312,17 +384,107 @@ export async function registerRoutes(app: Express): Promise<Server> {
       handleErrors(err as Error, res);
     }
   });
+
+  // --- CONNECTION ROUTES ---
+  // (createConnection is already above, this adds accept/reject and listing)
+
+  app.post("/api/connections/:connectionId/accept", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "User not authenticated" });
+
+      const connectionId = parseInt(req.params.connectionId);
+      if (isNaN(connectionId)) return res.status(400).json({ message: "Invalid connection ID" });
+
+      const connection = await storage.getConnectionById(connectionId);
+      if (!connection) return res.status(404).json({ message: "Connection not found" });
+
+      // Verify that the authenticated user is the recipient (connectedUserId) of the connection request
+      if (connection.connectedUserId !== req.user.id) {
+        return res.status(403).json({ message: "Forbidden: You cannot accept this connection request." });
+      }
+      if (connection.status !== 'pending') {
+        return res.status(400).json({ message: `Connection is already ${connection.status}.`});
+      }
+
+      const updatedConnection = await storage.updateConnectionStatus(connectionId, 'accepted');
+      res.json(updatedConnection);
+    } catch (err) {
+      handleErrors(err as Error, res);
+    }
+  });
+
+  app.post("/api/connections/:connectionId/reject", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "User not authenticated" });
+
+      const connectionId = parseInt(req.params.connectionId);
+      if (isNaN(connectionId)) return res.status(400).json({ message: "Invalid connection ID" });
+
+      const connection = await storage.getConnectionById(connectionId);
+      if (!connection) return res.status(404).json({ message: "Connection not found" });
+
+      // Verify that the authenticated user is the recipient (connectedUserId)
+      if (connection.connectedUserId !== req.user.id) {
+         // Or, allow initiator to cancel their own pending request
+         if (connection.userId === req.user.id && connection.status === 'pending') {
+            // Allow initiator to reject/cancel their own pending request
+         } else {
+            return res.status(403).json({ message: "Forbidden: You cannot reject this connection request." });
+         }
+      }
+      if (connection.status !== 'pending') {
+        return res.status(400).json({ message: `Connection is already ${connection.status}.`});
+      }
+
+      const updatedConnection = await storage.updateConnectionStatus(connectionId, 'rejected');
+      res.json(updatedConnection);
+    } catch (err) {
+      handleErrors(err as Error, res);
+    }
+  });
+
+  // Get connections for the authenticated user (can filter by status: 'pending', 'accepted', 'rejected')
+  app.get("/api/connections", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "User not authenticated" });
+
+      const status = req.query.status as typeof schema.connections.status.enumValues[number] | undefined;
+      if (status && !['pending', 'accepted', 'rejected'].includes(status)) {
+        return res.status(400).json({ message: "Invalid status filter." });
+      }
+
+      const connections = await storage.getConnectionsForUser(req.user.id, status);
+      res.json(connections);
+    } catch (err) {
+      handleErrors(err as Error, res);
+    }
+  });
   
+  app.get("/api/users/:userId/mutual-connections/:otherUserId", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = parseInt(req.params.userId);
+      const otherUserId = parseInt(req.params.otherUserId);
+
+      if (isNaN(userId) || isNaN(otherUserId)) {
+        return res.status(400).json({ message: "Invalid user IDs provided." });
+      }
+
+      const mutualConnections = await storage.getMutualConnections(userId, otherUserId);
+      res.json(mutualConnections);
+    } catch (err) {
+      handleErrors(err as Error, res);
+    }
+  });
+
   // Get users directory
-  app.get("/api/users/directory", async (req: Request, res: Response) => {
+  app.get("/api/users/directory", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const searchTerm = req.query.searchTerm as string | undefined;
       const specialtyFilter = req.query.specialtyFilter as string | undefined;
       const showConnected = req.query.showConnected === "true";
       
-      const currentUser = await storage.getCurrentUser();
-      if (!currentUser) {
-        return res.status(404).json({ message: "User not found" });
+      if (!req.user) { // Required for filtering out self and potentially for 'showConnected' logic
+        return res.status(401).json({ message: "User not authenticated" });
       }
       
       // Get all users or filtered by specialty
@@ -334,7 +496,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Filter out current user
-      users = users.filter(user => user.id !== currentUser.id);
+      users = users.filter(user => user.id !== req.user!.id);
       
       // Filter by connection status if needed
       if (showConnected) {
@@ -369,14 +531,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Get stats
-  app.get("/api/stats", async (req: Request, res: Response) => {
+  app.get("/api/stats", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const currentUser = await storage.getCurrentUser();
-      if (!currentUser) {
-        return res.status(404).json({ message: "User not found" });
+      if (!req.user) {
+        return res.status(401).json({ message: "User not authenticated" });
       }
       
-      const stats = await storage.getStats(currentUser.id);
+      const stats = await storage.getStats(req.user.id);
       res.json(stats);
     } catch (err) {
       handleErrors(err as Error, res);
@@ -384,13 +545,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Get posts
-  app.get("/api/posts", async (req: Request, res: Response) => {
+  app.get("/api/posts", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const filter = req.query.filter as string | undefined;
       const searchTerm = req.query.searchTerm as string | undefined;
       const categoryId = req.query.categoryId as string | undefined;
       
-      const posts = await storage.getPosts(filter, searchTerm, categoryId);
+      // Pass currentUserId (if available) for 'saved' filter, otherwise undefined
+      const currentUserId = req.user?.id;
+      const posts = await storage.getPosts(currentUserId, filter, searchTerm, categoryId);
       
       // Get full post data with author and participants
       const postsWithData = await Promise.all(posts.map(async post => {
@@ -398,10 +561,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const category = await storage.getCategory(post.categoryId);
         const participants = await storage.getPostParticipants(post.id);
         
-        // Check if current user has saved this post
-        const currentUser = await storage.getCurrentUser();
-        const savedPosts = Array.from(await storage.getPosts("saved"));
-        const isSaved = savedPosts.some(savedPost => savedPost.id === post.id);
+        let isSaved = false;
+        if (currentUserId) {
+          // Check if this specific post is saved by the current user
+          // This can be optimized by fetching all saved post IDs for the user once
+          // or by including a saved flag directly from a more complex getPosts query.
+          const savedUserPosts = await storage.getPosts(currentUserId, "saved");
+          isSaved = savedUserPosts.some(savedPost => savedPost.id === post.id);
+        }
         
         return {
           ...post,
@@ -427,7 +594,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Create post
-  app.post("/api/posts", authenticateJWT, authorizeRoles(UserRole.Values.admin, UserRole.Values.superadmin), async (req: AuthenticatedRequest, res: Response) => {
+  app.post("/api/posts", authenticateJWT, authorizeRoles(UserRole.enum.Doctor), async (req: AuthenticatedRequest, res: Response) => {
     try {
       // User is authenticated and authorized by middleware
       if (!req.user) { // Should be caught by authenticateJWT, but as a safeguard
@@ -435,21 +602,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Validate request body
-      const parsedData = insertPostSchema.safeParse({
-        title: req.body.title,
-        content: req.body.content,
-        authorId: req.user.id, // Use authenticated user's ID
-        categoryId: parseInt(req.body.categoryId),
-        timeAgo: "Just now",
-        createdAt: new Date(),
-        updatedAt: new Date()
+      // authorId will be set by the backend using req.user.id
+      const { authorId, ...postDataFromClient } = req.body; // Exclude authorId if sent by client
+      const parsedData = insertPostSchema.omit({ authorId: true }).safeParse({
+        title: postDataFromClient.title,
+        content: postDataFromClient.content,
+        categoryId: parseInt(postDataFromClient.categoryId),
+        timeAgo: "Just now", // This should ideally be set by backend or be a timestamp
+        createdAt: new Date(), // Should be handled by DB default
+        updatedAt: new Date()  // Should be handled by DB default
       });
       
       if (!parsedData.success) {
         throw parsedData.error;
       }
       
-      const post = await storage.createPost(parsedData.data);
+      const post = await storage.createPost(parsedData.data, req.user.id);
       res.status(201).json(post);
     } catch (err) {
       handleErrors(err as Error, res);
@@ -457,18 +625,82 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Save/unsave post
-  app.post("/api/posts/:id/save", async (req: Request, res: Response) => {
+  app.post("/api/posts/:id/save", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const postId = parseInt(req.params.id);
-      const saved = req.body.saved;
+      const saved = req.body.saved; // Should be boolean
       
-      const currentUser = await storage.getCurrentUser();
-      if (!currentUser) {
-        return res.status(404).json({ message: "User not found" });
+      if (!req.user) {
+        return res.status(401).json({ message: "User not authenticated" });
       }
       
-      await storage.savePost(postId, currentUser.id, saved);
+      await storage.savePost(req.user.id, postId, saved);
       res.json({ success: true });
+    } catch (err) {
+      handleErrors(err as Error, res);
+    }
+  });
+
+  // --- LIKE ROUTES ---
+  app.post("/api/posts/:postId/like", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "User not authenticated" });
+
+      const postId = parseInt(req.params.postId);
+      if (isNaN(postId)) return res.status(400).json({ message: "Invalid post ID" });
+
+      const userId = req.user.id;
+
+      // Attempt to create a like. If it already exists, delete it (toggle behavior).
+      const likeResult = await storage.createLike(postId, userId);
+
+      if (likeResult.alreadyExists) {
+        await storage.deleteLike(postId, userId);
+        // Fetch current likes count (optional, or client can manage this)
+        const likes = await storage.getLikesForPost(postId);
+        return res.json({ message: "Post unliked successfully.", liked: false, likesCount: likes.length });
+      } else if (likeResult.error) {
+        return res.status(500).json({ message: likeResult.error });
+      }
+
+      const likes = await storage.getLikesForPost(postId);
+      res.json({ message: "Post liked successfully.", liked: true, like: likeResult, likesCount: likes.length });
+    } catch (err) {
+      handleErrors(err as Error, res);
+    }
+  });
+
+  // --- COMMENT ROUTES ---
+  app.get("/api/posts/:postId/comments", async (req: AuthenticatedRequest, res: Response) => { // Can be public or JWT authenticated
+    try {
+      const postId = parseInt(req.params.postId);
+      if (isNaN(postId)) return res.status(400).json({ message: "Invalid post ID" });
+
+      const comments = await storage.getCommentsForPost(postId);
+      // Optionally, transform comments here to include user details if not done in storage
+      res.json(comments);
+    } catch (err) {
+      handleErrors(err as Error, res);
+    }
+  });
+
+  app.post("/api/posts/:postId/comments", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: "User not authenticated" });
+
+      const postId = parseInt(req.params.postId);
+      if (isNaN(postId)) return res.status(400).json({ message: "Invalid post ID" });
+
+      const validationResult = createCommentSchema.safeParse(req.body);
+      if (!validationResult.success) {
+        return res.status(400).json({ message: "Invalid comment data.", errors: validationResult.error.flatten() });
+      }
+      const { content, parentId } = validationResult.data;
+
+      const comment = await storage.createComment(postId, req.user.id, content, parentId ?? undefined); // Ensure parentId is passed as undefined if null/omitted
+      // Optionally, fetch the created comment with user details to return
+      const newCommentWithDetails = await storage.getCommentById(comment.id);
+      res.status(201).json(newCommentWithDetails || comment);
     } catch (err) {
       handleErrors(err as Error, res);
     }
@@ -493,12 +725,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Get documents
-  app.get("/api/documents", async (req: Request, res: Response) => {
+  app.get("/api/documents", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const filter = req.query.filter as string | undefined;
       const searchTerm = req.query.searchTerm as string | undefined;
+      const currentUserId = req.user?.id; // Optional user ID for filtering
       
-      const documents = await storage.getDocuments(filter, searchTerm);
+      const documents = await storage.getDocuments(currentUserId, filter, searchTerm);
       
       // Transform data for frontend
       const docsWithSharing = await Promise.all(documents.map(async doc => {
@@ -535,9 +768,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Get recent documents
-  app.get("/api/documents/recent", async (req: Request, res: Response) => {
+  app.get("/api/documents/recent", authenticateJWT, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const documents = await storage.getDocuments();
+      // For "recent", currentUserId might not be strictly necessary unless recency is per-user.
+      // Assuming public recency for now. If it's per user, pass req.user.id.
+      const documents = await storage.getDocuments(undefined); // Pass undefined for currentUserId if not needed
       
       // Sort by updatedAt and take latest 3
       const recentDocs = documents
@@ -579,7 +814,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Upload document
-  app.post("/api/documents/upload", authenticateJWT, authorizeRoles(UserRole.Values.admin, UserRole.Values.superadmin), upload.single("file"), async (req: AuthenticatedRequest, res: Response) => {
+  app.post("/api/documents/upload", authenticateJWT, authorizeRoles(UserRole.enum.Doctor), upload.single("file"), async (req: AuthenticatedRequest, res: Response) => {
     try {
       const file = req.file;
       if (!file) {
@@ -605,20 +840,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Validate document data
-      const parsedData = insertDocumentSchema.safeParse({
-        filename: file.originalname,
-        fileType,
-        ownerId: req.user.id, // Use authenticated user's ID
-        timeAgo: "Just now",
-        createdAt: new Date(),
-        updatedAt: new Date()
+      // ownerId will be set by the backend using req.user.id
+      const { ownerId, ...docDataFromClient } = req.body; // Exclude ownerId if sent
+      const parsedData = insertDocumentSchema.omit({ ownerId: true }).safeParse({
+        filename: file.originalname, // filename comes from multer's file object
+        fileType,                   // fileType determined from extension
+        // ownerId: req.user.id,    // This will be passed as separate arg to storage.createDocument
+        timeAgo: "Just now",        // Ideally set by backend or use timestamp
+        createdAt: new Date(),      // Should be DB default
+        updatedAt: new Date()       // Should be DB default
       });
       
       if (!parsedData.success) {
         throw parsedData.error;
       }
+      // Pass data from parsedData.data, but ensure it aligns with Omit<InsertDocument, 'ownerId'>
+      // This might mean constructing the object explicitly if parsedData.data includes more than expected
+      const documentToCreate = {
+        filename: file.originalname,
+        fileType,
+        timeAgo: parsedData.data.timeAgo,
+        // any other fields from InsertDocument that are not ownerId, createdAt, or updatedAt if handled by DB
+      };
       
-      const document = await storage.createDocument(parsedData.data);
+      const document = await storage.createDocument(documentToCreate, req.user.id);
       res.status(201).json(document);
     } catch (err) {
       handleErrors(err as Error, res);
@@ -707,7 +952,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   
   // Get all users (example of a protected route, though typically you might not protect a generic user list this way without pagination/filtering)
-  app.get("/api/users", authenticateJWT, authorizeRoles(UserRole.Values.admin, UserRole.Values.superadmin), async (req: AuthenticatedRequest, res: Response) => {
+  app.get("/api/users", authenticateJWT, authorizeRoles(UserRole.enum.Doctor), async (req: AuthenticatedRequest, res: Response) => {
     try {
       const users = await storage.getUsers();
       // Filter out password before sending
@@ -736,3 +981,36 @@ function getColorClass(specialty: string): string {
   
   return colorMap[specialty] || "bg-gray-200 text-gray-600";
 }
+
+// --- DASHBOARD ROUTES ---
+// Part 1: Doctor Dashboard APIs
+app.get("/api/dashboard/doctor/student-connection-requests", authenticateJWT, authorizeRoles(UserRole.enum.Doctor), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (!req.user) return res.status(401).json({ message: "User not authenticated" });
+    const doctorId = req.user.id;
+
+    // Fetch pending connections where the current doctor is the recipient
+    const pendingConnections = await storage.getConnectionsForUser(doctorId, 'pending');
+
+    // Filter for requests initiated by students
+    // The `getConnectionsForUser` should populate `user` (initiator) and `connectedUser` (recipient)
+    const studentRequests = pendingConnections.filter(conn =>
+      conn.userId !== doctorId && // Ensure the doctor is the recipient (connectedUserId)
+      conn.user?.role === UserRole.enum.Student
+    );
+
+    res.json(studentRequests);
+  } catch (err) {
+    handleErrors(err as Error, res);
+  }
+});
+
+app.get("/api/dashboard/doctor/appointments", authenticateJWT, authorizeRoles(UserRole.enum.Doctor), async (req: AuthenticatedRequest, res: Response) => {
+  // Placeholder for Doctor's appointments
+  res.json({ message: "Appointments endpoint for Doctors - to be implemented", appointments: [] });
+});
+
+app.get("/api/dashboard/doctor/messages", authenticateJWT, authorizeRoles(UserRole.enum.Doctor), async (req: AuthenticatedRequest, res: Response) => {
+  // Placeholder for Doctor's messages
+  res.json({ message: "Messages endpoint for Doctors - to be implemented", messages: [] });
+});
