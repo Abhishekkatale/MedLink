@@ -12,9 +12,14 @@ import { dirname } from 'path';
 import { insertPostSchema, insertDocumentSchema, insertConnectionSchema, insertUserSchema, User } from "@shared/schema"; // Added insertUserSchema & User
 import { ZodError } from "zod";
 import { fromZodError } from "zod-validation-error";
+import { getColorClass } from './utils';
 
 // Define a JWT secret key
-const JWT_SECRET = process.env.JWT_SECRET || "your-super-secret-key-for-dev";
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error("FATAL ERROR: JWT_SECRET environment variable is not set.");
+  process.exit(1);
+}
 
 // Extend Express Request type to include 'user' property
 interface AuthenticatedRequest extends Request {
@@ -554,39 +559,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Pass currentUserId (if available) for 'saved' filter, otherwise undefined
       const currentUserId = req.user?.id;
-      const posts = await storage.getPosts(currentUserId, filter, searchTerm, categoryId);
+      const posts = await storage.getPosts(currentUserId, filter, searchTerm, categoryId); // This now returns posts with details
       
-      // Get full post data with author and participants
-      const postsWithData = await Promise.all(posts.map(async post => {
-        const author = await storage.getUser(post.authorId);
-        const category = await storage.getCategory(post.categoryId);
-        const participants = await storage.getPostParticipants(post.id);
-        
-        let isSaved = false;
-        if (currentUserId) {
-          // Check if this specific post is saved by the current user
-          // This can be optimized by fetching all saved post IDs for the user once
-          // or by including a saved flag directly from a more complex getPosts query.
-          const savedUserPosts = await storage.getPosts(currentUserId, "saved");
-          isSaved = savedUserPosts.some(savedPost => savedPost.id === post.id);
-        }
+      // Transform data for frontend, assuming 'posts' from storage now includes author, category, postParticipants, and saved status
+      const postsWithData = posts.map(post => {
+        // post.author is the full author object
+        // post.category is the full category object
+        // post.postParticipants is an array of User objects for participants
+        // post.saved is a boolean
         
         return {
-          ...post,
-          author: author,
-          category: {
-            name: category?.name || "Unknown",
-            color: category?.color || "gray"
+          ...post, // Spreads the original post fields (id, title, content, createdAt, etc.)
+          author: post.author, // Already fetched
+          category: { // Transform category if needed by frontend, or pass as is
+            name: post.category?.name || "Unknown",
+            color: post.category?.color || "gray"
           },
-          discussCount: participants.length,
-          participants: participants.map(p => ({
+          discussCount: post.postParticipants?.length || 0,
+          participants: post.postParticipants?.map(p => ({
             id: p.id,
             initials: p.initials,
-            colorClass: getColorClass(p.specialty)
-          })),
-          saved: isSaved
+            // specialty is needed for getColorClass
+            // Ensure 'specialty' is included in the user object for participants from storage.getPosts
+            colorClass: getColorClass(p.specialty || "")
+          })) || [],
+          saved: post.saved // Already fetched
         };
-      }));
+      });
       
       res.json(postsWithData);
     } catch (err) {
@@ -609,7 +608,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         title: postDataFromClient.title,
         content: postDataFromClient.content,
         categoryId: parseInt(postDataFromClient.categoryId),
-        timeAgo: "Just now", // This should ideally be set by backend or be a timestamp
         createdAt: new Date(), // Should be handled by DB default
         updatedAt: new Date()  // Should be handled by DB default
       });
@@ -732,12 +730,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const searchTerm = req.query.searchTerm as string | undefined;
       const currentUserId = req.user?.id; // Optional user ID for filtering
       
-      const documents = await storage.getDocuments(currentUserId, filter, searchTerm);
+      const documents = await storage.getDocuments(currentUserId, filter, searchTerm); // Now returns documents with sharedUsers
       
       // Transform data for frontend
-      const docsWithSharing = await Promise.all(documents.map(async doc => {
-        const sharedUsers = await storage.getDocumentSharedUsers(doc.id);
-        
+      const docsWithData = documents.map(doc => {
+        // doc.sharedUsers should be an array of User objects (id, initials, specialty)
+        const sharedUsersDetails = (doc.sharedUsers || []).map(user => ({
+          id: user.id,
+          initials: user.initials,
+          colorClass: getColorClass(user.specialty || "") // Ensure specialty is available
+        }));
+
         // Map file type to icon and color
         const fileTypeMap: Record<string, { icon: string, color: string }> = {
           "PDF": { icon: "description", color: "primary" },
@@ -754,15 +757,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             name: doc.fileType,
             color: fileInfo.color
           },
-          sharedWith: sharedUsers.map(user => ({
-            id: user.id,
-            initials: user.initials,
-            colorClass: getColorClass(user.specialty)
-          }))
+          sharedWith: sharedUsersDetails
         };
-      }));
+      });
       
-      res.json(docsWithSharing);
+      res.json(docsWithData);
     } catch (err) {
       handleErrors(err as Error, res);
     }
@@ -781,9 +780,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .slice(0, 3);
       
       // Transform data for frontend
-      const docsWithSharing = await Promise.all(recentDocs.map(async doc => {
-        const sharedUsers = await storage.getDocumentSharedUsers(doc.id);
-        
+      const docsWithData = recentDocs.map(doc => {
+        // doc.sharedUsers should be an array of User objects (id, initials, specialty)
+        const sharedUsersDetails = (doc.sharedUsers || []).map(user => ({
+          id: user.id,
+          initials: user.initials,
+          colorClass: getColorClass(user.specialty || "") // Ensure specialty is available
+        }));
+
         // Map file type to icon and color
         const fileTypeMap: Record<string, { icon: string, color: string }> = {
           "PDF": { icon: "description", color: "primary" },
@@ -800,15 +804,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             name: doc.fileType,
             color: fileInfo.color
           },
-          sharedWith: sharedUsers.map(user => ({
-            id: user.id,
-            initials: user.initials,
-            colorClass: getColorClass(user.specialty)
-          }))
+          sharedWith: sharedUsersDetails
         };
-      }));
+      });
       
-      res.json(docsWithSharing);
+      res.json(docsWithData);
     } catch (err) {
       handleErrors(err as Error, res);
     }
@@ -847,7 +847,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         filename: file.originalname, // filename comes from multer's file object
         fileType,                   // fileType determined from extension
         // ownerId: req.user.id,    // This will be passed as separate arg to storage.createDocument
-        timeAgo: "Just now",        // Ideally set by backend or use timestamp
         createdAt: new Date(),      // Should be DB default
         updatedAt: new Date()       // Should be DB default
       });
@@ -860,7 +859,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const documentToCreate = {
         filename: file.originalname,
         fileType,
-        timeAgo: parsedData.data.timeAgo,
         // any other fields from InsertDocument that are not ownerId, createdAt, or updatedAt if handled by DB
       };
       
@@ -1175,18 +1173,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   const httpServer = createServer(app);
   return httpServer;
-}
-
-// Helper function to get color class based on specialty
-function getColorClass(specialty: string): string {
-  const colorMap: Record<string, string> = {
-    "Cardiology": "bg-primary/20 text-primary",
-    "Neurology": "bg-secondary/20 text-secondary",
-    "Infectious Disease": "bg-green-100 text-green-600",
-    "Pulmonology": "bg-accent/20 text-accent/80"
-  };
-  
-  return colorMap[specialty] || "bg-gray-200 text-gray-600";
 }
 
 // --- DASHBOARD ROUTES ---

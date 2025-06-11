@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp } from 'drizzle-orm/pg-core';
+import { pgTable, text, serial, integer, boolean, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 // Adjust the import path for UserRole based on the new file location (server/db/schema.ts)
 import { UserRole } from '../../shared/schema';
 
@@ -45,7 +45,6 @@ export const posts = pgTable("posts", {
   content: text("content").notNull(),
   authorId: integer("author_id").references(() => users.id, { onDelete: 'cascade' }).notNull(),
   categoryId: integer("category_id").references(() => categories.id, { onDelete: 'set null' }), // Allow category to be nullified
-  timeAgo: text("time_ago").notNull(), // This might be better handled by timestamps
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -56,7 +55,6 @@ export const documents = pgTable("documents", {
   filename: text("filename").notNull(),
   fileType: text("file_type").notNull(),
   ownerId: integer("owner_id").references(() => users.id, { onDelete: 'cascade' }).notNull(),
-  timeAgo: text("time_ago").notNull(), // This might be better handled by timestamps
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -148,9 +146,10 @@ export const likes = pgTable("likes", {
   postId: integer("post_id").references(() => posts.id, { onDelete: 'cascade' }).notNull(),
   userId: integer("user_id").references(() => users.id, { onDelete: 'cascade' }).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  // TODO: Add unique constraint for (postId, userId) in the migration or using db.execute for custom SQL
-  // Example for unique constraint (usually added via SQL in migration file or separate index file):
-  // ... (uniqueIndex("likes_post_user_unique_idx").on(likes.postId, likes.userId))
+}, (table) => {
+  return {
+    likesPostUserUniqueIdx: uniqueIndex("likes_post_user_unique_idx").on(table.postId, table.userId),
+  };
 });
 
 export const likeRelations = relations(likes, ({ one }) => ({
@@ -187,7 +186,28 @@ export const postRelations = relations(posts, ({ one, many }) => ({
     category: one(categories, { fields: [posts.categoryId], references: [categories.id] }),
     likes: many(likes),
     comments: many(comments),
-    // participants: many(postParticipants), // if needed
+    postParticipants: many(postParticipants),
+    savedPosts: many(savedPosts),
+}));
+
+export const postParticipantRelations = relations(postParticipants, ({ one }) => ({
+  post: one(posts, { fields: [postParticipants.postId], references: [posts.id] }),
+  user: one(users, { fields: [postParticipants.userId], references: [users.id] }),
+}));
+
+export const savedPostRelations = relations(savedPosts, ({ one }) => ({
+  post: one(posts, { fields: [savedPosts.postId], references: [posts.id] }),
+  user: one(users, { fields: [savedPosts.userId], references: [users.id] }),
+}));
+
+export const documentRelations = relations(documents, ({ one, many }) => ({
+  owner: one(users, { fields: [documents.ownerId], references: [users.id], relationName: 'ownerToDocuments' }),
+  documentSharings: many(documentSharing),
+}));
+
+export const documentSharingRelations = relations(documentSharing, ({ one }) => ({
+  document: one(documents, { fields: [documentSharing.documentId], references: [documents.id] }),
+  user: one(users, { fields: [documentSharing.userId], references: [users.id] }),
 }));
 
 export const connectionRelations = relations(connections, ({ one }) => ({

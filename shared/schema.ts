@@ -40,7 +40,6 @@ export const posts = pgTable("posts", {
   content: text("content").notNull(),
   authorId: integer("author_id").references(() => users.id).notNull(),
   categoryId: integer("category_id").references(() => categories.id).notNull(),
-  timeAgo: text("time_ago").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -58,7 +57,6 @@ export const documents = pgTable("documents", {
   filename: text("filename").notNull(),
   fileType: text("file_type").notNull(),
   ownerId: integer("owner_id").references(() => users.id).notNull(),
-  timeAgo: text("time_ago").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
