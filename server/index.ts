@@ -1,5 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import path from "path"; // Import path
+import { fileURLToPath } from 'url'; // Added
+import { dirname } from 'path'; // Added
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
@@ -8,6 +10,8 @@ const app = express();
 // Serve uploaded files statically
 // Assuming __dirname is <project_root>/server when running with tsx, or <project_root>/dist/server after build
 // The uploads directory is at <project_root>/uploads
+const __filename = fileURLToPath(import.meta.url); // Added
+const __dirname = dirname(__filename); // Added
 const uploadsPath = path.join(__dirname, '../uploads');
 app.use('/uploads', express.static(uploadsPath));
 

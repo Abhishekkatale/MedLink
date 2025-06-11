@@ -1,11 +1,12 @@
 import { drizzle, NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { Pool } from 'pg';
+import pg from 'pg'; // Changed import
+const { Pool } = pg; // Compatibility for named import style if pg is a CJS module default export
 import { eq, and, or, like, desc, sql, InferSelectModel, InferInsertModel, asc } from 'drizzle-orm'; // Added asc
 import * as bcrypt from 'bcrypt';
 
 // Import Drizzle schema
-import * as schema from '../db/schema'; // Adjusted path
-import { UserRole } from '../../shared/schema'; // For UserRole enum values
+import * as schema from './db/schema'; // Adjusted path
+import { UserRole } from '@shared/schema'; // For UserRole enum values
 
 // Import types from shared/schema.ts for IStorage interface adherence
 // These types are Zod-based. Drizzle can infer its own types, but IStorage uses these.
@@ -85,7 +86,7 @@ export interface IStorage {
 
 export class DrizzleStorage implements IStorage {
   private db: NodePgDatabase<typeof schema>;
-  private pool: Pool;
+  private pool: pg.Pool; // Changed type to pg.Pool
   // private currentUserIdForDemo: number = 1; // Removed
 
   constructor() {
@@ -93,6 +94,9 @@ export class DrizzleStorage implements IStorage {
     if (!databaseUrl) {
       throw new Error("DATABASE_URL environment variable is not set.");
     }
+    // If 'pg' default export has Pool as a property:
+    // this.pool = new pg.Pool({ connectionString: databaseUrl });
+    // If Pool was deconstructured from default (like const { Pool } = pg;):
     this.pool = new Pool({ connectionString: databaseUrl });
     this.db = drizzle(this.pool, { schema });
   }
@@ -825,20 +829,6 @@ export class DrizzleStorage implements IStorage {
 
     console.log("Database seeding completed.");
   }
-}
-
-// Export an instance of DrizzleStorage
-export const storage = new DrizzleStorage();
-
-// Comment out MemStorage to avoid conflicts or if it's no longer needed.
-// Or export it under a different name if it's needed for comparison/testing.
-/*
-export class MemStorage implements IStorage {
-  // ... (original MemStorage code)
-}
-// export const storage = new MemStorage(); // Original instantiation
-*/
-
   // Connection lifecycle methods implementations
   async getConnectionById(connectionId: number): Promise<Connection | undefined> {
     return this.db.query.connections.findFirst({
@@ -908,3 +898,16 @@ export class MemStorage implements IStorage {
       where: sql`${schema.users.id} in ${mutualIds}`
     }) as Promise<User[]>;
   }
+}
+
+// Export an instance of DrizzleStorage
+export const storage = new DrizzleStorage();
+
+// Comment out MemStorage to avoid conflicts or if it's no longer needed.
+// Or export it under a different name if it's needed for comparison/testing.
+/*
+export class MemStorage implements IStorage {
+  // ... (original MemStorage code)
+}
+// export const storage = new MemStorage(); // Original instantiation
+*/
