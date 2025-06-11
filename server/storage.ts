@@ -1,710 +1,780 @@
-import { 
-  users, User, InsertUser,
-  profiles, Profile, InsertProfile,
-  posts, Post, InsertPost,
-  categories, Category, InsertCategory,
-  documents, Document, InsertDocument,
-  events, Event, InsertEvent,
-  eventTypes, EventType, InsertEventType,
-  documentSharing, DocumentSharing, InsertDocumentSharing,
-  postParticipants, PostParticipant, InsertPostParticipant,
-  savedPosts, SavedPost, InsertSavedPost,
-  connections, Connection, InsertConnection,
-  stats, Stat, InsertStat,
-  UserRole // Import UserRole
-} from "@shared/schema";
-import * as bcrypt from 'bcrypt'; // Import bcrypt
+import { drizzle, NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { Pool } from 'pg';
+import { eq, and, or, like, desc, sql, InferSelectModel, InferInsertModel, asc } from 'drizzle-orm'; // Added asc
+import * as bcrypt from 'bcrypt';
 
+// Import Drizzle schema
+import * as schema from '../db/schema'; // Adjusted path
+import { UserRole } from '../../shared/schema'; // For UserRole enum values
+
+// Import types from shared/schema.ts for IStorage interface adherence
+// These types are Zod-based. Drizzle can infer its own types, but IStorage uses these.
+import type {
+  User, InsertUser,
+  Profile, InsertProfile,
+  Post, InsertPost,
+  Category, InsertCategory,
+  Document, InsertDocument,
+  Event, InsertEvent,
+  EventType, InsertEventType,
+  DocumentSharing, InsertDocumentSharing,
+  PostParticipant, InsertPostParticipant,
+  SavedPost, InsertSavedPost,
+  Connection, InsertConnection,
+  Stat, InsertStat,
+  Like, InsertLike, // Added Like types
+  Comment, InsertComment // Added Comment types
+} from "@shared/schema";
+
+// Define IStorage interface (copied from original, ensure it's identical)
 export interface IStorage {
-  // User methods
   getUsers(): Promise<User[]>;
   getUsersBySpecialty(specialty: string): Promise<User[]>;
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>; // InsertUser already includes role
-  verifyPassword(password: string, hash: string): Promise<boolean>; // Add verifyPassword to interface
-  getCurrentUser(): Promise<User | undefined>;
+  createUser(user: InsertUser): Promise<User>;
+  updateUser(userId: number, updates: Partial<Omit<User, 'id' | 'username' | 'password' | 'role'>>): Promise<User | undefined>;
+  verifyPassword(password: string, hash: string): Promise<boolean>;
+  // getCurrentUser() removed, use getUser(id) instead from route context
   getUserColleagues(userId: number): Promise<User[]>;
   getUserSuggestions(userId: number): Promise<User[]>;
   getConnectionRequests(userId: number): Promise<User[]>;
   createConnection(userId: number, connectedUserId: number): Promise<Connection>;
-  
-  // Profile methods
   getProfile(userId: number): Promise<Profile | undefined>;
   createProfile(profile: InsertProfile): Promise<Profile>;
   updateProfile(userId: number, profile: Partial<Profile>): Promise<Profile | undefined>;
-  
-  // Posts methods
-  getPosts(filter?: string, searchTerm?: string, categoryId?: string): Promise<Post[]>;
+  getPosts(currentUserId: number | undefined, filter?: string, searchTerm?: string, categoryId?: string): Promise<Post[]>;
   getPost(id: number): Promise<Post | undefined>;
-  createPost(post: InsertPost): Promise<Post>;
-  savePost(postId: number, userId: number, isSaved: boolean): Promise<void>;
+  createPost(post: Omit<InsertPost, 'authorId'>, authorId: number): Promise<Post>; // authorId now explicit
+  savePost(currentUserId: number, postId: number, isSaved: boolean): Promise<void>; // userId renamed to currentUserId for clarity
   getPostParticipants(postId: number): Promise<User[]>;
-  
-  // Categories methods
   getCategories(): Promise<Category[]>;
   getCategory(id: number): Promise<Category | undefined>;
   createCategory(category: InsertCategory): Promise<Category>;
-  
-  // Documents methods
-  getDocuments(filter?: string, searchTerm?: string): Promise<Document[]>;
+  getDocuments(currentUserId: number | undefined, filter?: string, searchTerm?: string): Promise<Document[]>;
   getDocument(id: number): Promise<Document | undefined>;
-  createDocument(document: InsertDocument): Promise<Document>;
+  createDocument(document: Omit<InsertDocument, 'ownerId'>, ownerId: number): Promise<Document>; // ownerId now explicit
   shareDocument(documentId: number, userIds: number[]): Promise<void>;
   getDocumentSharedUsers(documentId: number): Promise<User[]>;
-  
-  // Events methods
   getEvents(): Promise<Event[]>;
   getEvent(id: number): Promise<Event | undefined>;
   createEvent(event: InsertEvent): Promise<Event>;
-  
-  // Event types methods
   getEventTypes(): Promise<EventType[]>;
   getEventType(id: number): Promise<EventType | undefined>;
   createEventType(eventType: InsertEventType): Promise<EventType>;
-  
-  // Specialty methods
   getSpecialties(): Promise<string[]>;
-  
-  // Stats methods
   getStats(userId: number): Promise<Stat[]>;
   createStat(stat: InsertStat): Promise<Stat>;
+  seedDatabase(): Promise<void>; // Added for seeding
+
+  // Connection lifecycle methods
+  getConnectionById(connectionId: number): Promise<Connection | undefined>;
+  updateConnectionStatus(connectionId: number, status: typeof schema.connections.status.enumValues[number]): Promise<Connection | undefined>;
+  getConnectionsForUser(userId: number, status?: typeof schema.connections.status.enumValues[number]): Promise<Connection[]>;
+  getMutualConnections(userId1: number, userId2: number): Promise<User[]>;
+
+  // Likes and Comments methods
+  createLike(postId: number, userId: number): Promise<Like | { error?: string; alreadyExists?: boolean }>;
+  deleteLike(postId: number, userId: number): Promise<{ success: boolean }>;
+  getLikesForPost(postId: number): Promise<Like[]>; // Consider returning User[] or count for efficiency
+  createComment(postId: number, userId: number, content: string, parentId?: number): Promise<Comment>;
+  getCommentsForPost(postId: number): Promise<Comment[]>;
+  getCommentById(commentId: number): Promise<Comment | undefined>;
 }
 
-export class MemStorage implements IStorage {
-  private usersData: Map<number, User>;
-  private profilesData: Map<number, Profile>;
-  private postsData: Map<number, Post>;
-  private categoriesData: Map<number, Category>;
-  private documentsData: Map<number, Document>;
-  private eventsData: Map<number, Event>;
-  private eventTypesData: Map<number, EventType>;
-  private documentSharingData: Map<number, DocumentSharing>;
-  private postParticipantsData: Map<number, PostParticipant>;
-  private savedPostsData: Map<number, SavedPost>;
-  private connectionsData: Map<number, Connection>;
-  private statsData: Map<number, Stat>;
-  
-  private currentUserId: number = 1; // For demo purposes, we'll assume user 1 is logged in
-  private userId: number = 1;
-  private profileId: number = 1;
-  private postId: number = 1;
-  private categoryId: number = 1;
-  private documentId: number = 1;
-  private eventId: number = 1;
-  private eventTypeId: number = 1;
-  private documentSharingId: number = 1;
-  private postParticipantId: number = 1;
-  private savedPostId: number = 1;
-  private connectionId: number = 1;
-  private statId: number = 1;
-  
+
+export class DrizzleStorage implements IStorage {
+  private db: NodePgDatabase<typeof schema>;
+  private pool: Pool;
+  // private currentUserIdForDemo: number = 1; // Removed
+
   constructor() {
-    this.usersData = new Map();
-    this.profilesData = new Map();
-    this.postsData = new Map();
-    this.categoriesData = new Map();
-    this.documentsData = new Map();
-    this.eventsData = new Map();
-    this.eventTypesData = new Map();
-    this.documentSharingData = new Map();
-    this.postParticipantsData = new Map();
-    this.savedPostsData = new Map();
-    this.connectionsData = new Map();
-    this.statsData = new Map();
-    
-    this.initializeData();
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      throw new Error("DATABASE_URL environment variable is not set.");
+    }
+    this.pool = new Pool({ connectionString: databaseUrl });
+    this.db = drizzle(this.pool, { schema });
   }
-  
-  // Initialize some sample data
-  private initializeData() {
-    // Create categories
-    const cardiology = this.createCategory({ name: "Cardiology", color: "primary" });
-    const neurology = this.createCategory({ name: "Neurology", color: "secondary" });
-    const infectiousDisease = this.createCategory({ name: "Infectious Disease", color: "green-600" });
-    
-    // Create event types
-    const webinar = this.createEventType({ name: "Webinar", color: "primary" });
-    const workshop = this.createEventType({ name: "Workshop", color: "secondary" });
-    const conference = this.createEventType({ name: "Conference", color: "accent/80" });
-    
-    // Create some users
-    const saltRounds = 10;
-    const johnWilson = this.createUser({
-      username: "johnwilson",
-      password: "password", // Will be hashed by createUser
-      name: "Dr. John Wilson",
-      title: "Cardiologist",
-      organization: "Boston Medical Center",
-      specialty: "Cardiology",
-      location: "Boston, MA",
-      initials: "JW",
-      isConnected: false,
-      role: UserRole.Values.superadmin
-    });
 
-    this.createUser({
-      username: "janedavis",
-      password: "password", // Will be hashed by createUser
-      name: "Dr. Jane Davis",
-      title: "Neurologist",
-      organization: "Mass General Hospital",
-      specialty: "Neurology",
-      location: "Boston, MA",
-      initials: "JD",
-      isConnected: true,
-      role: UserRole.Values.admin
-    });
-
-    this.createUser({
-      username: "michaelsmith",
-      password: "password", // Will be hashed by createUser
-      name: "Dr. Michael Smith",
-      title: "Infectious Disease Specialist",
-      organization: "Johns Hopkins",
-      specialty: "Infectious Disease",
-      location: "Baltimore, MD",
-      initials: "MS",
-      isConnected: true,
-      role: UserRole.Values.patient
-    });
-
-    this.createUser({
-      username: "rebeccajones",
-      password: "password", // Will be hashed by createUser
-      name: "Dr. Rebecca Jones",
-      title: "Pulmonologist",
-      organization: "Cleveland Clinic",
-      specialty: "Pulmonology",
-      location: "Cleveland, OH",
-      initials: "RJ",
-      isConnected: true,
-      role: UserRole.Values.patient
-    });
-
-    // Add some user suggestions
-    this.createUser({
-      username: "sarahadams",
-      password: "password", // Will be hashed by createUser
-      name: "Dr. Sarah Adams",
-      title: "Neurologist",
-      organization: "Mass General Hospital",
-      specialty: "Neurology",
-      location: "Boston, MA",
-      initials: "SA",
-      isConnected: false,
-      role: UserRole.Values.patient
-    });
-
-    this.createUser({
-      username: "robertlee",
-      password: "password", // Will be hashed by createUser
-      name: "Dr. Robert Lee",
-      title: "Pulmonologist",
-      organization: "Cleveland Clinic",
-      specialty: "Pulmonology",
-      location: "Cleveland, OH",
-      initials: "RL",
-      isConnected: false,
-      role: UserRole.Values.patient
-    });
-
-    this.createUser({
-      username: "karenpark",
-      password: "password", // Will be hashed by createUser
-      name: "Dr. Karen Park",
-      title: "Cardiologist",
-      organization: "Mayo Clinic",
-      specialty: "Cardiology",
-      location: "Rochester, MN",
-      initials: "KP",
-      isConnected: false,
-      role: UserRole.Values.patient
-    });
-    
-    // Create user profile
-    this.createProfile({
-      userId: johnWilson.id,
-      profileCompletion: 85,
-      remainingItems: 3,
-      networkGrowth: 12,
-      networkGrowthDays: 30
-    });
-    
-    // Create posts
-    this.createPost({
-      title: "New JAMA Study: Long-term Outcomes of TAVR vs. SAVR in High-Risk Patients",
-      content: "This groundbreaking research provides new insights into comparative outcomes for transcatheter and surgical aortic valve replacement procedures...",
-      authorId: johnWilson.id,
-      categoryId: cardiology.id,
-      timeAgo: "2 days ago",
-      createdAt: new Date(),
-      updatedAt: new Date()
-    });
-    
-    this.createPost({
-      title: "FDA Approves Novel Treatment for Early-Stage Alzheimer's Disease",
-      content: "The FDA has granted approval for a new treatment targeting amyloid plaques, showing modest but meaningful cognitive benefits in early-stage patients...",
-      authorId: 2, // Jane Davis
-      categoryId: neurology.id,
-      timeAgo: "4 days ago",
-      createdAt: new Date(),
-      updatedAt: new Date()
-    });
-    
-    this.createPost({
-      title: "Updated CDC Guidelines for Managing Antibiotic-Resistant Infections",
-      content: "New recommendations provide updated protocols for addressing the growing challenge of antimicrobial resistance in clinical settings...",
-      authorId: 3, // Michael Smith
-      categoryId: infectiousDisease.id,
-      timeAgo: "1 week ago",
-      createdAt: new Date(),
-      updatedAt: new Date()
-    });
-    
-    // Create some post participants
-    this.createPostParticipant(1, 2); // Jane Davis discussing post 1
-    this.createPostParticipant(1, 3); // Michael Smith discussing post 1
-    this.createPostParticipant(2, 4); // Rebecca Jones discussing post 2
-    this.createPostParticipant(2, 1); // John Wilson discussing post 2
-    this.createPostParticipant(2, 2); // Jane Davis discussing post 2
-    this.createPostParticipant(3, 2); // Jane Davis discussing post 3
-    
-    // Create documents
-    this.createDocument({
-      filename: "Patient Case Analysis Q2.pdf",
-      fileType: "PDF",
-      ownerId: johnWilson.id,
-      timeAgo: "2 days ago",
-      createdAt: new Date(),
-      updatedAt: new Date()
-    });
-    
-    this.createDocument({
-      filename: "Treatment Effectiveness Data.xlsx",
-      fileType: "Excel",
-      ownerId: johnWilson.id,
-      timeAgo: "5 days ago",
-      createdAt: new Date(),
-      updatedAt: new Date()
-    });
-    
-    this.createDocument({
-      filename: "Cardiology Conference Slides.pptx",
-      fileType: "PPT",
-      ownerId: johnWilson.id,
-      timeAgo: "1 week ago",
-      createdAt: new Date(),
-      updatedAt: new Date()
-    });
-    
-    // Share documents
-    this.shareDocument(1, [2, 3]); // Share with Jane Davis and Michael Smith
-    this.shareDocument(2, [4]); // Share with Rebecca Jones
-    
-    // Create events
-    this.createEvent({
-      title: "Advances in Cardiac Imaging Webinar",
-      location: "Virtual Event",
-      time: "2:00 PM - 3:30 PM EST",
-      eventTypeId: webinar.id,
-      date: new Date(2023, 4, 15), // May 15, 2023
-      createdAt: new Date()
-    });
-    
-    this.createEvent({
-      title: "Clinical Research Methodology Workshop",
-      location: "Boston Medical Center",
-      time: "9:00 AM - 4:00 PM",
-      eventTypeId: workshop.id,
-      date: new Date(2023, 5, 8), // June 8, 2023
-      createdAt: new Date()
-    });
-    
-    // Create stats
-    this.createStat({
-      userId: johnWilson.id,
-      title: "New Research Articles",
-      value: 24,
-      icon: "article",
-      iconColor: "text-primary",
-      change: 12,
-      timeframe: "last week"
-    });
-    
-    this.createStat({
-      userId: johnWilson.id,
-      title: "Network Connections",
-      value: 128,
-      icon: "people",
-      iconColor: "text-secondary",
-      change: 8,
-      timeframe: "last month"
-    });
-    
-    this.createStat({
-      userId: johnWilson.id,
-      title: "Document Shares",
-      value: 16,
-      icon: "folder_shared",
-      iconColor: "text-accent/80",
-      change: -3,
-      timeframe: "last week"
-    });
-    
-    this.createStat({
-      userId: johnWilson.id,
-      title: "Pending Responses",
-      value: 7,
-      icon: "question_answer",
-      iconColor: "text-yellow-500",
-      change: -5,
-      timeframe: "yesterday"
-    });
-  }
-  
   // User methods
   async getUsers(): Promise<User[]> {
-    return Array.from(this.usersData.values());
+    // The return type User is from Zod. Drizzle's select will infer a similar structure.
+    // We might need to cast or ensure compatibility if structures diverge.
+    return this.db.query.users.findMany() as Promise<User[]>;
   }
-  
+
   async getUsersBySpecialty(specialty: string): Promise<User[]> {
-    return Array.from(this.usersData.values()).filter(
-      (user) => user.specialty === specialty
-    );
+    return this.db.query.users.findMany({
+      where: eq(schema.users.specialty, specialty),
+    }) as Promise<User[]>;
+  }
+
+  // Likes and Comments methods implementations
+  async createLike(postId: number, userId: number): Promise<Like | { error?: string; alreadyExists?: boolean }> {
+    try {
+      const result = await this.db.insert(schema.likes)
+        .values({ postId, userId })
+        .returning();
+      return result[0] as Like;
+    } catch (error: any) {
+      // Check for unique constraint violation (specific error code depends on DB, e.g., '23505' for PostgreSQL)
+      if (error.code === '23505') { // PostgreSQL unique violation
+        return { error: "User has already liked this post.", alreadyExists: true };
+      }
+      console.error("Error creating like:", error);
+      return { error: "Failed to create like." };
+    }
+  }
+
+  async deleteLike(postId: number, userId: number): Promise<{ success: boolean }> {
+    const result = await this.db.delete(schema.likes)
+      .where(and(eq(schema.likes.postId, postId), eq(schema.likes.userId, userId)))
+      .returning(); // .returning({ id: schema.likes.id }); in newer Drizzle to check if something was deleted
+    return { success: result.length > 0 };
+  }
+
+  async getLikesForPost(postId: number): Promise<Like[]> {
+    return this.db.query.likes.findMany({
+      where: eq(schema.likes.postId, postId),
+      with: { // Optionally include user details if Like type expects it
+        user: true
+      }
+    }) as Promise<Like[]>;
+  }
+
+  async createComment(postId: number, userId: number, content: string, parentId?: number): Promise<Comment> {
+    const commentPayload: InsertComment = { postId, userId, content };
+    if (parentId !== undefined) {
+      commentPayload.parentId = parentId;
+    }
+    const result = await this.db.insert(schema.comments)
+      .values(commentPayload)
+      .returning();
+    return result[0] as Comment;
+  }
+
+  async getCommentsForPost(postId: number): Promise<Comment[]> {
+    // Fetch comments, order by creation date for basic chronological display
+    // For threaded display, frontend might need to reconstruct hierarchy from parentId
+    return this.db.query.comments.findMany({
+      where: eq(schema.comments.postId, postId),
+      orderBy: [asc(schema.comments.createdAt)], // asc for chronological
+      with: { // Optionally include user details if Comment type expects it
+        user: true,
+        // replies: true, // If you set up a 'replies' relation in your Drizzle schema for comments
+      }
+    }) as Promise<Comment[]>;
   }
   
+  async getCommentById(commentId: number): Promise<Comment | undefined> {
+    return this.db.query.comments.findFirst({
+        where: eq(schema.comments.id, commentId),
+        with: { user: true }
+    }) as Promise<Comment | undefined>;
+  }
   async getUser(id: number): Promise<User | undefined> {
-    return this.usersData.get(id);
+    return this.db.query.users.findFirst({
+      where: eq(schema.users.id, id),
+    }) as Promise<User | undefined>;
   }
-  
+
   async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.usersData.values()).find(
-      (user) => user.username === username
-    );
+    return this.db.query.users.findFirst({
+      where: eq(schema.users.username, username),
+    }) as Promise<User | undefined>;
   }
-  
+
+  async updateUser(userId: number, updates: Partial<Omit<User, 'id' | 'username' | 'password' | 'role'>>): Promise<User | undefined> {
+    if (Object.keys(updates).length === 0) {
+      return this.getUser(userId); // No updates, just return the user
+    }
+    const result = await this.db.update(schema.users)
+      .set(updates)
+      .where(eq(schema.users.id, userId))
+      .returning();
+    return result[0] as User | undefined;
+  }
+
   async createUser(user: InsertUser): Promise<User> {
-    const id = this.userId++;
     const saltRounds = 10;
     const hashedPassword = bcrypt.hashSync(user.password, saltRounds);
-    // The `role` property is part of `InsertUser` type and will be included in `...user`
-    const newUser: User = { ...user, id, password: hashedPassword };
-    this.usersData.set(id, newUser);
-    return newUser;
+
+    // InsertUser is Zod-based. Drizzle's insert type is InferInsertModel.
+    // Ensure all fields in 'user' (an InsertUser) match what 'schema.users' expects.
+    const newUserPayload = {
+      ...user,
+      password: hashedPassword,
+      // role needs to be one of UserRole.options
+      role: user.role as typeof schema.users.role.enumValues[number],
+    };
+
+    const result = await this.db.insert(schema.users).values(newUserPayload).returning();
+    return result[0] as User;
   }
 
   async verifyPassword(password: string, hash: string): Promise<boolean> {
     return bcrypt.compareSync(password, hash);
   }
 
-  async getCurrentUser(): Promise<User | undefined> {
-    return this.usersData.get(this.currentUserId);
-  }
-  
+  // getCurrentUser() removed from IStorage and DrizzleStorage.
+  // Routes will use getUser(id) with id from authenticated req.user.
+
   async getUserColleagues(userId: number): Promise<User[]> {
-    // In this simple implementation, we return users that are marked as connected
-    return Array.from(this.usersData.values()).filter(
-      (user) => user.id !== userId && user.isConnected
-    );
+    // This logic is simplified based on MemStorage (isConnected flag).
+    // A real app would have a proper connections table and join.
+    // The current schema has 'connections' table, so we should use that.
+    const userConnections = await this.db.query.connections.findMany({
+        where: and(
+            eq(schema.connections.userId, userId),
+            eq(schema.connections.status, 'accepted') // Assuming 'accepted' status means colleague
+        ),
+        with: {
+            connectedUser: true // Load the related user
+        }
+    });
+    const colleagues = userConnections.map(conn => conn.connectedUser);
+
+    // Also consider connections where the current user is the connectedUserId
+     const inverseUserConnections = await this.db.query.connections.findMany({
+        where: and(
+            eq(schema.connections.connectedUserId, userId),
+            eq(schema.connections.status, 'accepted')
+        ),
+        with: {
+            user: true // Load the related user
+        }
+    });
+    colleagues.push(...inverseUserConnections.map(conn => conn.user));
+
+    // Filter out duplicates if any and the user itself (though current logic shouldn't add user itself)
+    const uniqueColleagues = Array.from(new Set(colleagues.map(c => c.id)))
+      .map(id => colleagues.find(c => c.id === id)!)
+      .filter(c => c.id !== userId);
+
+    return uniqueColleagues as User[];
   }
-  
+
   async getUserSuggestions(userId: number): Promise<User[]> {
-    // Return users that are not connected and not the current user
-    return Array.from(this.usersData.values()).filter(
-      (user) => user.id !== userId && !user.isConnected
-    );
+    // Get IDs of users already connected or requested to exclude them
+    const existingConnections = await this.db.query.connections.findMany({
+        where: or(
+            eq(schema.connections.userId, userId),
+            eq(schema.connections.connectedUserId, userId)
+        )
+    });
+    const connectedUserIds = new Set(existingConnections.flatMap(c => [c.userId, c.connectedUserId]));
+    connectedUserIds.add(userId); // Exclude self
+
+    const allUsers = await this.db.query.users.findMany();
+    const suggestions = allUsers.filter(u => !connectedUserIds.has(u.id));
+    return suggestions as User[];
   }
-  
+
   async getConnectionRequests(userId: number): Promise<User[]> {
-    // Get pending connection requests
-    const pendingConnections = Array.from(this.connectionsData.values()).filter(
-      (conn) => conn.connectedUserId === userId && conn.status === "pending"
-    );
-    
-    // Get the users who made these requests
-    const users: User[] = [];
-    for (const conn of pendingConnections) {
-      const user = await this.getUser(conn.userId);
-      if (user) users.push(user);
-    }
-    
-    return users;
+    const requests = await this.db.query.connections.findMany({
+      where: and(
+        eq(schema.connections.connectedUserId, userId),
+        eq(schema.connections.status, "pending")
+      ),
+      with: {
+        user: true, // The user who sent the request
+      }
+    });
+    return requests.map(r => r.user) as User[];
   }
-  
+
   async createConnection(userId: number, connectedUserId: number): Promise<Connection> {
-    const id = this.connectionId++;
-    const connection: Connection = {
-      id,
+    // Ensure types match Drizzle's expected insert type.
+    // Connection is Zod-based.
+    const newConnectionPayload = {
       userId,
       connectedUserId,
-      status: "pending",
-      createdAt: new Date()
+      status: "pending", // Default status
+      // createdAt is defaultNow() in schema
     };
-    this.connectionsData.set(id, connection);
-    return connection;
+    const result = await this.db.insert(schema.connections).values(newConnectionPayload).returning();
+    return result[0] as Connection;
   }
-  
+
   // Profile methods
   async getProfile(userId: number): Promise<Profile | undefined> {
-    return Array.from(this.profilesData.values()).find(
-      (profile) => profile.userId === userId
-    );
+    return this.db.query.profiles.findFirst({
+      where: eq(schema.profiles.userId, userId),
+    }) as Promise<Profile | undefined>;
   }
-  
+
   async createProfile(profile: InsertProfile): Promise<Profile> {
-    const id = this.profileId++;
-    const newProfile = { ...profile, id };
-    this.profilesData.set(id, newProfile);
-    return newProfile;
+    const result = await this.db.insert(schema.profiles).values(profile).returning();
+    return result[0] as Profile;
   }
-  
-  async updateProfile(userId: number, updates: Partial<Profile>): Promise<Profile | undefined> {
-    const profile = await this.getProfile(userId);
-    if (!profile) return undefined;
-    
-    const updatedProfile = { ...profile, ...updates };
-    this.profilesData.set(profile.id, updatedProfile);
-    return updatedProfile;
+
+  async updateProfile(userId: number, profileUpdates: Partial<Profile>): Promise<Profile | undefined> {
+    // Drizzle's update doesn't directly return the updated object by default in all scenarios.
+    // We might need to fetch it again if `returning()` isn't sufficient or behaves differently.
+    const currentProfile = await this.getProfile(userId);
+    if (!currentProfile) return undefined;
+
+    // Drizzle expects all fields for .returning() to be from the base table usually
+    // For partial updates, ensure that `id` is not in `profileUpdates` if it's part of Zod schema but not PK
+    const { id, ...updatesToApply } = profileUpdates; // Assuming 'id' in Profile is PK, userId is FK.
+
+    const result = await this.db.update(schema.profiles)
+      .set(updatesToApply)
+      .where(eq(schema.profiles.userId, userId))
+      .returning();
+    return result[0] as Profile | undefined;
   }
-  
-  // Posts methods
-  async getPosts(filter?: string, searchTerm?: string, categoryId?: string): Promise<Post[]> {
-    let posts = Array.from(this.postsData.values());
-    
-    if (filter === "saved") {
-      // Get saved posts for current user
-      const savedPostIds = Array.from(this.savedPostsData.values())
-        .filter((sp) => sp.userId === this.currentUserId)
-        .map((sp) => sp.postId);
-      
-      posts = posts.filter((post) => savedPostIds.includes(post.id));
-    }
-    
+
+  // TODO: Implement other methods (Posts, Categories, Documents, Events, Stats, etc.)
+  // This is a partial implementation to fit within reasonable limits for a single step.
+  // The remaining methods would follow similar patterns.
+
+  async getPosts(currentUserId: number | undefined, filter?: string, searchTerm?: string, categoryId?: string): Promise<Post[]> {
+    const conditions = [];
     if (categoryId && categoryId !== "all") {
-      posts = posts.filter((post) => post.categoryId === parseInt(categoryId));
+      conditions.push(eq(schema.posts.categoryId, parseInt(categoryId)));
     }
-    
     if (searchTerm) {
-      const lowerSearchTerm = searchTerm.toLowerCase();
-      posts = posts.filter(
-        (post) =>
-          post.title.toLowerCase().includes(lowerSearchTerm) ||
-          post.content.toLowerCase().includes(lowerSearchTerm)
+      const term = `%${searchTerm.toLowerCase()}%`;
+      conditions.push(
+        or(
+          like(sql`lower(${schema.posts.title})`, term),
+          like(sql`lower(${schema.posts.content})`, term)
+        )
       );
     }
     
-    return posts;
+    if (filter === "saved" && currentUserId) {
+        const savedPostRelations = await this.db.query.savedPosts.findMany({
+            where: eq(schema.savedPosts.userId, currentUserId)
+        });
+        const savedPostIds = savedPostRelations.map(sp => sp.postId);
+        if (savedPostIds.length === 0) return []; // No saved posts for this user, return empty
+        conditions.push(sql`${schema.posts.id} in ${savedPostIds}`);
+    } else if (filter === "saved" && !currentUserId) {
+        // Cannot get saved posts without a user context
+        return [];
+    }
+
+    const queryOptions = conditions.length > 0 ? { where: and(...conditions) } : {orderBy: [desc(schema.posts.createdAt)]};
+    if (conditions.length > 0) {
+      (queryOptions as any).orderBy = [desc(schema.posts.createdAt)]; // Add orderBy if where exists
+    }
+    return this.db.query.posts.findMany(queryOptions) as Promise<Post[]>;
   }
-  
+
   async getPost(id: number): Promise<Post | undefined> {
-    return this.postsData.get(id);
+    return this.db.query.posts.findFirst({
+      where: eq(schema.posts.id, id),
+    }) as Promise<Post | undefined>;
   }
-  
-  async createPost(post: InsertPost): Promise<Post> {
-    const id = this.postId++;
-    const newPost = { ...post, id };
-    this.postsData.set(id, newPost);
-    return newPost;
+
+  async createPost(post: Omit<InsertPost, 'authorId'>, authorId: number): Promise<Post> {
+    const postPayload = {
+        ...post,
+        authorId: authorId, // Set authorId from parameter
+        // timeAgo, createdAt, updatedAt handled by schema or will be part of 'post'
+    };
+    const result = await this.db.insert(schema.posts).values(postPayload).returning();
+    return result[0] as Post;
   }
-  
-  async savePost(postId: number, userId: number, isSaved: boolean): Promise<void> {
-    // Find existing saved post
-    const existingSaved = Array.from(this.savedPostsData.values()).find(
-      (sp) => sp.postId === postId && sp.userId === userId
-    );
-    
-    if (isSaved && !existingSaved) {
-      // Save the post
-      const id = this.savedPostId++;
-      const savedPost: SavedPost = { id, postId, userId };
-      this.savedPostsData.set(id, savedPost);
-    } else if (!isSaved && existingSaved) {
-      // Unsave the post
-      this.savedPostsData.delete(existingSaved.id);
-    }
-  }
-  
-  async getPostParticipants(postId: number): Promise<User[]> {
-    // Get participant records for the post
-    const participants = Array.from(this.postParticipantsData.values()).filter(
-      (pp) => pp.postId === postId
-    );
-    
-    // Get the user objects
-    const users: User[] = [];
-    for (const pp of participants) {
-      const user = await this.getUser(pp.userId);
-      if (user) users.push(user);
-    }
-    
-    return users;
-  }
-  
-  private createPostParticipant(postId: number, userId: number): PostParticipant {
-    const id = this.postParticipantId++;
-    const participant: PostParticipant = { id, postId, userId };
-    this.postParticipantsData.set(id, participant);
-    return participant;
-  }
-  
-  // Categories methods
-  async getCategories(): Promise<Category[]> {
-    return Array.from(this.categoriesData.values());
-  }
-  
-  async getCategory(id: number): Promise<Category | undefined> {
-    return this.categoriesData.get(id);
-  }
-  
-  async createCategory(category: InsertCategory): Promise<Category> {
-    const id = this.categoryId++;
-    const newCategory = { ...category, id };
-    this.categoriesData.set(id, newCategory);
-    return newCategory;
-  }
-  
-  // Documents methods
-  async getDocuments(filter?: string, searchTerm?: string): Promise<Document[]> {
-    let documents = Array.from(this.documentsData.values());
-    
-    if (filter === "shared-by-me") {
-      // Get documents shared by current user
-      const documentIds = new Set(
-        Array.from(this.documentSharingData.values())
-          .filter((ds) => {
-            const doc = this.documentsData.get(ds.documentId);
-            return doc && doc.ownerId === this.currentUserId;
-          })
-          .map((ds) => ds.documentId)
-      );
-      
-      documents = documents.filter((doc) => documentIds.has(doc.id));
-    } else if (filter === "shared-with-me") {
-      // Get documents shared with current user
-      const documentIds = new Set(
-        Array.from(this.documentSharingData.values())
-          .filter((ds) => ds.userId === this.currentUserId)
-          .map((ds) => ds.documentId)
-      );
-      
-      documents = documents.filter((doc) => documentIds.has(doc.id));
-    } else if (filter && filter !== "all") {
-      // Filter by document type
-      documents = documents.filter((doc) => doc.fileType.toLowerCase() === filter.toLowerCase());
-    }
-    
-    if (searchTerm) {
-      const lowerSearchTerm = searchTerm.toLowerCase();
-      documents = documents.filter((doc) =>
-        doc.filename.toLowerCase().includes(lowerSearchTerm)
-      );
-    }
-    
-    return documents;
-  }
-  
-  async getDocument(id: number): Promise<Document | undefined> {
-    return this.documentsData.get(id);
-  }
-  
-  async createDocument(document: InsertDocument): Promise<Document> {
-    const id = this.documentId++;
-    const newDocument = { ...document, id };
-    this.documentsData.set(id, newDocument);
-    return newDocument;
-  }
-  
-  async shareDocument(documentId: number, userIds: number[]): Promise<void> {
-    for (const userId of userIds) {
-      // Check if already shared
-      const isAlreadyShared = Array.from(this.documentSharingData.values()).some(
-        (ds) => ds.documentId === documentId && ds.userId === userId
-      );
-      
-      if (!isAlreadyShared) {
-        const id = this.documentSharingId++;
-        const sharing: DocumentSharing = {
-          id,
-          documentId,
-          userId,
-          createdAt: new Date()
-        };
-        this.documentSharingData.set(id, sharing);
+
+  async savePost(currentUserId: number, postId: number, isSaved: boolean): Promise<void> {
+    const existingSavedPost = await this.db.query.savedPosts.findFirst({
+      where: and(
+        eq(schema.savedPosts.postId, postId),
+        eq(schema.savedPosts.userId, currentUserId)
+      ),
+    });
+
+    if (isSaved) {
+      if (!existingSavedPost) {
+        await this.db.insert(schema.savedPosts).values({ postId, userId: currentUserId });
+      }
+    } else {
+      if (existingSavedPost) {
+        await this.db.delete(schema.savedPosts).where(eq(schema.savedPosts.id, existingSavedPost.id));
       }
     }
   }
-  
+
+  async getPostParticipants(postId: number): Promise<User[]> {
+    const participantsRelations = await this.db.query.postParticipants.findMany({
+      where: eq(schema.postParticipants.postId, postId),
+      with: {
+        user: true, // Assuming 'user' is the relation name for userId FK to users table
+      },
+    });
+    return participantsRelations.map(pr => pr.user) as User[];
+  }
+
+  async getCategories(): Promise<Category[]> {
+    return this.db.query.categories.findMany() as Promise<Category[]>;
+  }
+  async getCategory(id: number): Promise<Category | undefined> {
+    return this.db.query.categories.findFirst({ where: eq(schema.categories.id, id) }) as Promise<Category | undefined>;
+  }
+  async createCategory(category: InsertCategory): Promise<Category> {
+    const result = await this.db.insert(schema.categories).values(category).returning();
+    return result[0] as Category;
+  }
+
+  async getDocuments(currentUserId: number | undefined, filter?: string, searchTerm?: string): Promise<Document[]> {
+    const conditions = [];
+    if (searchTerm) {
+      const term = `%${searchTerm.toLowerCase()}%`;
+      conditions.push(like(sql`lower(${schema.documents.filename})`, term));
+    }
+
+    if (filter === "shared-by-me" && currentUserId) {
+        conditions.push(eq(schema.documents.ownerId, currentUserId));
+    } else if (filter === "shared-with-me" && currentUserId) {
+        const sharedDocsRelations = await this.db.query.documentSharing.findMany({
+            where: eq(schema.documentSharing.userId, currentUserId)
+        });
+        const sharedDocIds = sharedDocsRelations.map(sd => sd.documentId);
+        if (sharedDocIds.length === 0) return []; // No documents shared with this user
+        conditions.push(sql`${schema.documents.id} in ${sharedDocIds}`);
+    } else if ((filter === "shared-by-me" || filter === "shared-with-me") && !currentUserId) {
+        // Cannot get user-specific documents without a user context
+        return [];
+    } else if (filter && filter !== "all") { // Assuming filter is fileType
+        conditions.push(eq(sql`lower(${schema.documents.fileType})`, filter.toLowerCase()));
+    }
+    
+    const queryOptions = conditions.length > 0 ? { where: and(...conditions) } : {orderBy: [desc(schema.documents.createdAt)]};
+    if (conditions.length > 0) {
+      (queryOptions as any).orderBy = [desc(schema.documents.createdAt)];
+    }
+    return this.db.query.documents.findMany(queryOptions) as Promise<Document[]>;
+  }
+
+  async getDocument(id: number): Promise<Document | undefined> {
+    return this.db.query.documents.findFirst({
+      where: eq(schema.documents.id, id),
+    }) as Promise<Document | undefined>;
+  }
+
+  async createDocument(document: Omit<InsertDocument, 'ownerId'>, ownerId: number): Promise<Document> {
+    const documentPayload = {
+        ...document,
+        ownerId: ownerId, // Set ownerId from parameter
+        // timeAgo, createdAt, updatedAt handled by schema or will be part of 'document'
+    };
+    const result = await this.db.insert(schema.documents).values(documentPayload).returning();
+    return result[0] as Document;
+  }
+
+  async shareDocument(documentId: number, userIds: number[]): Promise<void> {
+    const existingShares = await this.db.query.documentSharing.findMany({
+        where: and(
+            eq(schema.documentSharing.documentId, documentId),
+            sql`${schema.documentSharing.userId} in ${userIds}`
+        )
+    });
+    const alreadySharedUserIds = new Set(existingShares.map(s => s.userId));
+
+    const newShares = userIds
+        .filter(uid => !alreadySharedUserIds.has(uid))
+        .map(userId => ({ documentId, userId }));
+
+    if (newShares.length > 0) {
+        await this.db.insert(schema.documentSharing).values(newShares);
+    }
+  }
   async getDocumentSharedUsers(documentId: number): Promise<User[]> {
-    // Get sharing records for the document
-    const sharings = Array.from(this.documentSharingData.values()).filter(
-      (ds) => ds.documentId === documentId
-    );
-    
-    // Get the user objects
-    const users: User[] = [];
-    for (const ds of sharings) {
-      const user = await this.getUser(ds.userId);
-      if (user) users.push(user);
-    }
-    
-    return users;
+    const sharingRelations = await this.db.query.documentSharing.findMany({
+        where: eq(schema.documentSharing.documentId, documentId),
+        with: { user: true } // Assuming relation 'user' on documentSharing table for userId
+    });
+    return sharingRelations.map(sr => sr.user) as User[];
   }
-  
-  // Events methods
+
   async getEvents(): Promise<Event[]> {
-    return Array.from(this.eventsData.values());
+    return this.db.query.events.findMany({
+      // Optional: Add ordering, e.g., by date
+      orderBy: [desc(schema.events.date)],
+      // Optional: Add relations if Event type in IStorage expects, e.g., eventType details
+      // with: { eventType: true }
+    }) as Promise<Event[]>;
   }
-  
+
   async getEvent(id: number): Promise<Event | undefined> {
-    return this.eventsData.get(id);
+    return this.db.query.events.findFirst({
+      where: eq(schema.events.id, id),
+      // with: { eventType: true } // If needed for the Event type
+    }) as Promise<Event | undefined>;
   }
-  
+
   async createEvent(event: InsertEvent): Promise<Event> {
-    const id = this.eventId++;
-    const newEvent = { ...event, id };
-    this.eventsData.set(id, newEvent);
-    return newEvent;
+    // InsertEvent is Zod-based. Drizzle expects fields of schema.events.
+    // Ensure date is correctly formatted if needed, though pg driver usually handles Date objects.
+    const eventPayload = {
+        title: event.title,
+        location: event.location,
+        time: event.time,
+        eventTypeId: event.eventTypeId,
+        date: event.date, // Should be a Date object or ISO string
+        // createdAt has defaultNow()
+    };
+    const result = await this.db.insert(schema.events).values(eventPayload).returning();
+    return result[0] as Event;
   }
-  
-  // Event types methods
+
   async getEventTypes(): Promise<EventType[]> {
-    return Array.from(this.eventTypesData.values());
+    return this.db.query.eventTypes.findMany() as Promise<EventType[]>;
   }
-  
   async getEventType(id: number): Promise<EventType | undefined> {
-    return this.eventTypesData.get(id);
+    return this.db.query.eventTypes.findFirst({ where: eq(schema.eventTypes.id, id) }) as Promise<EventType | undefined>;
   }
-  
   async createEventType(eventType: InsertEventType): Promise<EventType> {
-    const id = this.eventTypeId++;
-    const newEventType = { ...eventType, id };
-    this.eventTypesData.set(id, newEventType);
-    return newEventType;
+    const result = await this.db.insert(schema.eventTypes).values(eventType).returning();
+    return result[0] as EventType;
   }
-  
-  // Specialty methods
   async getSpecialties(): Promise<string[]> {
-    const specialties = new Set<string>();
-    for (const user of this.usersData.values()) {
-      specialties.add(user.specialty);
-    }
-    return Array.from(specialties);
+    // selectDistinctOn is not standard SQL and might not be supported directly or require specific syntax.
+    // A simpler way is to select all distinct specialties.
+    const distinctSpecialties = await this.db.selectDistinct( {specialty: schema.users.specialty} ).from(schema.users);
+    return distinctSpecialties.map(u => u.specialty).filter(s => s !== null) as string[];
   }
-  
-  // Stats methods
   async getStats(userId: number): Promise<Stat[]> {
-    return Array.from(this.statsData.values()).filter(
-      (stat) => stat.userId === userId
-    );
+    return this.db.query.stats.findMany({ where: eq(schema.stats.userId, userId) }) as Promise<Stat[]>;
   }
-  
   async createStat(stat: InsertStat): Promise<Stat> {
-    const id = this.statId++;
-    const newStat = { ...stat, id };
-    this.statsData.set(id, newStat);
-    return newStat;
+    const result = await this.db.insert(schema.stats).values(stat).returning();
+    return result[0] as Stat;
+  }
+
+  // Seed data method
+  async seedDatabase(): Promise<void> {
+    // Check if users exist, if so, assume seeding is done.
+    const firstUser = await this.db.query.users.findFirst();
+    if (firstUser) {
+      console.log("Database already seeded.");
+      return;
+    }
+
+    console.log("Seeding database...");
+
+    // Create categories
+    const catCardiology = await this.createCategory({ name: "Cardiology", color: "primary" });
+    const catNeurology = await this.createCategory({ name: "Neurology", color: "secondary" });
+    const catInfectiousDisease = await this.createCategory({ name: "Infectious Disease", color: "green-600" });
+
+    // Create event types
+    const etWebinar = await this.createEventType({ name: "Webinar", color: "primary" });
+    const etWorkshop = await this.createEventType({ name: "Workshop", color: "secondary" });
+    /*const etConference =*/ await this.createEventType({ name: "Conference", color: "accent/80" });
+
+    // Create users
+    // Note: `isConnected` was part of InsertUser from shared/schema but not in the db users table.
+    // It's handled by the `connections` table.
+    const userJohnWilson = await this.createUser({
+      username: "johnwilson", password: "password", name: "Dr. John Wilson", title: "Cardiologist",
+      organization: "Boston Medical Center", specialty: "Cardiology", location: "Boston, MA",
+      initials: "JW", role: UserRole.enum.Doctor
+    });
+
+    const userJaneDavis = await this.createUser({
+      username: "janedavis", password: "password", name: "Dr. Jane Davis", title: "Neurologist",
+      organization: "Mass General Hospital", specialty: "Neurology", location: "Boston, MA",
+      initials: "JD", role: UserRole.enum.Doctor
+    });
+
+    const userMichaelSmith = await this.createUser({
+      username: "michaelsmith", password: "password", name: "Dr. Michael Smith", title: "Infectious Disease Specialist",
+      organization: "Johns Hopkins", specialty: "Infectious Disease", location: "Baltimore, MD",
+      initials: "MS", role: UserRole.enum.Patient
+    });
+
+    const userRebeccaJones = await this.createUser({
+      username: "rebeccajones", password: "password", name: "Dr. Rebecca Jones", title: "Pulmonologist",
+      organization: "Cleveland Clinic", specialty: "Pulmonology", location: "Cleveland, OH",
+      initials: "RJ", role: UserRole.enum.Student
+    });
+
+     await this.createUser({
+      username: "sarahadams", password: "password", name: "Dr. Sarah Adams", title: "Neurologist",
+      organization: "Mass General Hospital", specialty: "Neurology", location: "Boston, MA",
+      initials: "SA", role: UserRole.enum.Student
+    });
+
+     await this.createUser({
+      username: "robertlee", password: "password", name: "Dr. Robert Lee", title: "Pulmonologist",
+      organization: "Cleveland Clinic", specialty: "Pulmonology", location: "Cleveland, OH",
+      initials: "RL", role: UserRole.enum.Patient
+    });
+
+     await this.createUser({
+      username: "karenpark", password: "password", name: "Dr. Karen Park", title: "Cardiologist",
+      organization: "Mayo Clinic", specialty: "Cardiology", location: "Rochester, MN",
+      initials: "KP", role: UserRole.enum.Doctor
+    });
+
+    // Create user profile
+    await this.createProfile({
+      userId: userJohnWilson.id, profileCompletion: 85, remainingItems: 3,
+      networkGrowth: 12, networkGrowthDays: 30
+    });
+
+    // Create connections based on original MemStorage's isConnected flags
+    if (userJohnWilson && userJaneDavis) { // Jane was isConnected: true for John in MemStorage (implicitly)
+        await this.createConnection(userJohnWilson.id, userJaneDavis.id);
+        // Accept the connection immediately for seeding
+        await this.db.update(schema.connections)
+            .set({ status: "accepted" })
+            .where(and(eq(schema.connections.userId, userJohnWilson.id), eq(schema.connections.connectedUserId, userJaneDavis.id)));
+    }
+    // Michael Smith was isConnected: true
+    const userMichael = await this.getUserByUsername("michaelsmith");
+    if (userJohnWilson && userMichael) { // Example: connect John to Michael
+         await this.createConnection(userJohnWilson.id, userMichael.id);
+         await this.db.update(schema.connections)
+            .set({ status: "accepted" })
+            .where(and(eq(schema.connections.userId, userJohnWilson.id), eq(schema.connections.connectedUserId, userMichael.id)));
+    }
+     // Rebecca Jones was isConnected: true
+    const userRebecca = await this.getUserByUsername("rebeccajones");
+    if (userJaneDavis && userRebecca) { // Example: connect Jane to Rebecca
+        await this.createConnection(userJaneDavis.id, userRebecca.id);
+        await this.db.update(schema.connections)
+            .set({ status: "accepted" })
+            .where(and(eq(schema.connections.userId, userJaneDavis.id), eq(schema.connections.connectedUserId, userRebecca.id)));
+    }
+
+
+    // Create posts
+    const post1 = await this.createPost({
+      title: "New JAMA Study: Long-term Outcomes of TAVR vs. SAVR in High-Risk Patients",
+      content: "This groundbreaking research provides new insights into comparative outcomes for transcatheter and surgical aortic valve replacement procedures...",
+      authorId: userJohnWilson.id, categoryId: catCardiology.id, timeAgo: "2 days ago",
+    });
+
+    const post2 = await this.createPost({
+      title: "FDA Approves Novel Treatment for Early-Stage Alzheimer's Disease",
+      content: "The FDA has granted approval for a new treatment targeting amyloid plaques, showing modest but meaningful cognitive benefits in early-stage patients...",
+      authorId: userJaneDavis.id, categoryId: catNeurology.id, timeAgo: "4 days ago",
+    });
+
+    await this.createPost({
+      title: "Updated CDC Guidelines for Managing Antibiotic-Resistant Infections",
+      content: "New recommendations provide updated protocols for addressing the growing challenge of antimicrobial resistance in clinical settings...",
+      authorId: userMichaelSmith.id, categoryId: catInfectiousDisease.id, timeAgo: "1 week ago",
+    });
+
+    // Create post participants
+    await this.db.insert(schema.postParticipants).values([
+        { postId: post1.id, userId: userJaneDavis.id },
+        { postId: post1.id, userId: userMichaelSmith.id },
+        { postId: post2.id, userId: userRebeccaJones.id },
+        { postId: post2.id, userId: userJohnWilson.id },
+    ]);
+
+    // Create documents
+    const doc1 = await this.createDocument({
+      filename: "Patient Case Analysis Q2.pdf", fileType: "PDF", ownerId: userJohnWilson.id, timeAgo: "2 days ago",
+    });
+    await this.createDocument({
+      filename: "Treatment Effectiveness Data.xlsx", fileType: "Excel", ownerId: userJohnWilson.id, timeAgo: "5 days ago",
+    });
+
+    // Share documents
+    await this.shareDocument(doc1.id, [userJaneDavis.id, userMichaelSmith.id]);
+
+    // Create events
+    await this.createEvent({
+      title: "Advances in Cardiac Imaging Webinar", location: "Virtual Event", time: "2:00 PM - 3:30 PM EST",
+      eventTypeId: etWebinar.id, date: new Date(2023, 4, 15), // Month is 0-indexed
+    });
+
+    // Create stats
+    await this.createStat({userId: userJohnWilson.id, title: "New Research Articles", value: 24, icon: "article", iconColor: "text-primary", change: 12, timeframe: "last week"});
+    await this.createStat({userId: userJohnWilson.id, title: "Network Connections", value: 128, icon: "people", iconColor: "text-secondary", change: 8, timeframe: "last month"});
+
+
+    console.log("Database seeding completed.");
   }
 }
 
-export const storage = new MemStorage();
+// Export an instance of DrizzleStorage
+export const storage = new DrizzleStorage();
+
+// Comment out MemStorage to avoid conflicts or if it's no longer needed.
+// Or export it under a different name if it's needed for comparison/testing.
+/*
+export class MemStorage implements IStorage {
+  // ... (original MemStorage code)
+}
+// export const storage = new MemStorage(); // Original instantiation
+*/
+
+  // Connection lifecycle methods implementations
+  async getConnectionById(connectionId: number): Promise<Connection | undefined> {
+    return this.db.query.connections.findFirst({
+      where: eq(schema.connections.id, connectionId),
+      with: {
+        user: true, // User who initiated
+        connectedUser: true // User who received
+      }
+    }) as Promise<Connection | undefined>;
+  }
+
+  async updateConnectionStatus(connectionId: number, status: typeof schema.connections.status.enumValues[number]): Promise<Connection | undefined> {
+    const result = await this.db.update(schema.connections)
+      .set({ status: status, updatedAt: new Date() }) // Also update updatedAt timestamp
+      .where(eq(schema.connections.id, connectionId))
+      .returning();
+    return result[0] as Connection | undefined;
+  }
+
+  async getConnectionsForUser(userId: number, status?: typeof schema.connections.status.enumValues[number]): Promise<Connection[]> {
+    const conditions = [
+      or(
+        eq(schema.connections.userId, userId),
+        eq(schema.connections.connectedUserId, userId)
+      )
+    ];
+    if (status) {
+      conditions.push(eq(schema.connections.status, status));
+    }
+    return this.db.query.connections.findMany({
+      where: and(...conditions),
+      with: { // Include details of both users in the connection
+        user: true,
+        connectedUser: true
+      }
+    }) as Promise<Connection[]>;
+  }
+
+  async getMutualConnections(userId1: number, userId2: number): Promise<User[]> {
+    // Get accepted connections for userId1
+    const connections1 = await this.db.query.connections.findMany({
+      where: and(
+        or(eq(schema.connections.userId, userId1), eq(schema.connections.connectedUserId, userId1)),
+        eq(schema.connections.status, 'accepted')
+      ),
+    });
+    const connectedIds1 = new Set(connections1.map(c => c.userId === userId1 ? c.connectedUserId : c.userId));
+
+    // Get accepted connections for userId2
+    const connections2 = await this.db.query.connections.findMany({
+      where: and(
+        or(eq(schema.connections.userId, userId2), eq(schema.connections.connectedUserId, userId2)),
+        eq(schema.connections.status, 'accepted')
+      ),
+    });
+    const connectedIds2 = new Set(connections2.map(c => c.userId === userId2 ? c.connectedUserId : c.userId));
+
+    // Find mutual connection IDs
+    const mutualIds = [...connectedIds1].filter(id => connectedIds2.has(id));
+
+    if (mutualIds.length === 0) {
+      return [];
+    }
+
+    // Fetch user details for mutual connections
+    return this.db.query.users.findMany({
+      where: sql`${schema.users.id} in ${mutualIds}`
+    }) as Promise<User[]>;
+  }

@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext'; // Will be created
-import { UserRole } from '@shared/schema'; // Import UserRole for dropdown
+import { useAuth } from '../contexts/AuthContext';
+import { UserRole } from '@shared/schema';
 
 const SignupPage: React.FC = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<UserRole>(UserRole.Values.patient); // Default role
-  const [name, setName] = useState(''); // Add other fields as needed by your backend
+  const [role, setRole] = useState<UserRole>(UserRole.Values.patient);
+  const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const { signup } = useAuth();
   const navigate = useNavigate();
@@ -16,7 +16,6 @@ const SignupPage: React.FC = () => {
     event.preventDefault();
     setError(null);
 
-    // Basic frontend validation (more comprehensive validation on backend)
     if (!username || !password || !name || !role) {
       setError("Please fill in all required fields.");
       return;
@@ -31,9 +30,6 @@ const SignupPage: React.FC = () => {
           password,
           role,
           name,
-          // Include other fields required by your /api/auth/signup endpoint
-          // e.g., title, organization, specialty, location, initials if they are mandatory
-          // For now, assuming backend handles missing optional fields or they are not strictly needed for basic signup
           title: "",
           organization: "",
           specialty: "",
@@ -42,73 +38,80 @@ const SignupPage: React.FC = () => {
         }),
       });
       const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.message || 'Failed to signup');
-      }
-      signup(data.token, data.user); // data.user should be the user object from backend
-      navigate('/dashboard'); // Or your desired redirect path
+      if (!response.ok) throw new Error(data.message || 'Signup failed');
+      signup(data.token, data.user);
+      navigate('/dashboard');
     } catch (err) {
       setError((err as Error).message);
     }
   };
 
   return (
-    <div style={{ maxWidth: '400px', margin: 'auto', padding: '20px' }}>
-      <h2>Signup</h2>
-      <form onSubmit={handleSubmit}>
-        <div>
-          <label htmlFor="name">Full Name:</label>
-          <input
-            type="text"
-            id="name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-            style={{ width: '100%', padding: '8px', marginBottom: '10px' }}
-          />
-        </div>
-        <div>
-          <label htmlFor="username">Username:</label>
-          <input
-            type="text"
-            id="username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            required
-            style={{ width: '100%', padding: '8px', marginBottom: '10px' }}
-          />
-        </div>
-        <div>
-          <label htmlFor="password">Password:</label>
-          <input
-            type="password"
-            id="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            style={{ width: '100%', padding: '8px', marginBottom: '10px' }}
-          />
-        </div>
-        <div>
-          <label htmlFor="role">Role:</label>
-          <select
-            id="role"
-            value={role}
-            onChange={(e) => setRole(e.target.value as UserRole)}
-            required
-            style={{ width: '100%', padding: '8px', marginBottom: '10px' }}
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-tr from-purple-100 to-blue-100 px-4">
+      <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md">
+        <h2 className="text-3xl font-bold text-center text-blue-700 mb-6">Create Your Account</h2>
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div>
+            <label htmlFor="name" className="block text-sm font-medium text-gray-700">Full Name</label>
+            <input
+              type="text"
+              id="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              className="mt-1 w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-purple-400 focus:outline-none"
+            />
+          </div>
+          <div>
+            <label htmlFor="username" className="block text-sm font-medium text-gray-700">Username</label>
+            <input
+              type="text"
+              id="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+              className="mt-1 w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-purple-400 focus:outline-none"
+            />
+          </div>
+          <div>
+            <label htmlFor="password" className="block text-sm font-medium text-gray-700">Password</label>
+            <input
+              type="password"
+              id="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              className="mt-1 w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-purple-400 focus:outline-none"
+            />
+          </div>
+          <div>
+            <label htmlFor="role" className="block text-sm font-medium text-gray-700">Role</label>
+            <select
+              id="role"
+              value={role}
+              onChange={(e) => setRole(e.target.value as UserRole)}
+              required
+              className="mt-1 w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-purple-400 focus:outline-none"
+            >
+              {UserRole.options.map(r => (
+                <option key={r} value={r}>
+                  {r.charAt(0).toUpperCase() + r.slice(1)}
+                </option>
+              ))}
+            </select>
+          </div>
+          {error && <p className="text-red-600 text-sm">{error}</p>}
+          <button
+            type="submit"
+            className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition duration-200"
           >
-            {UserRole.options.map(r => (
-              <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>
-            ))}
-          </select>
-        </div>
-        {/* Add other input fields here if your signup process requires them immediately,
-            e.g., title, organization, specialty, location, initials.
-            For simplicity, they are defaulted to empty strings in the fetch call for now. */}
-        {error && <p style={{ color: 'red' }}>{error}</p>}
-        <button type="submit" style={{ padding: '10px 15px' }}>Signup</button>
-      </form>
+            Sign Up
+          </button>
+        </form>
+        <p className="text-sm text-center text-gray-500 mt-6">
+          Already have an account? <a href="/login" className="text-blue-600 hover:underline">Login</a>
+        </p>
+      </div>
     </div>
   );
 };
